@@ -1921,6 +1921,14 @@ export const ShareBottomSheet = memo(
     const [isAnimating, setIsAnimating] = useState(false);
     const [shareMessage, setShareMessage] = useState('');
     const [copiedLink, setCopiedLink] = useState(false);
+    const [audience, setAudience] = useState<'Public' | 'Friends' | 'Only Me'>('Public');
+    const [showAudienceMenu, setShowAudienceMenu] = useState(false);
+    const [feeling, setFeeling] = useState('');
+    const [location, setLocation] = useState('');
+    const [taggedFriends, setTaggedFriends] = useState<number[]>([]);
+    const [subModal, setSubModal] = useState<'none' | 'tag' | 'location' | 'feeling'>('none');
+    const [searchFriendQuery, setSearchFriendQuery] = useState('');
+    const [isPosting, setIsPosting] = useState(false);
     const sheetRef = useRef<HTMLDivElement>(null);
     const backdropRef = useRef<HTMLDivElement>(null);
 
@@ -1986,6 +1994,9 @@ export const ShareBottomSheet = memo(
       };
       if (isOpen) {
         setActiveFlow('sheet');
+        setSubModal('none');
+        setShowAudienceMenu(false);
+        setIsPosting(false);
         setIsAnimating(true);
         setTimeout(() => setIsAnimating(false), 300);
         document.body.style.overflow = 'hidden';
@@ -2004,6 +2015,8 @@ export const ShareBottomSheet = memo(
       setTimeout(() => {
         onClose();
         setActiveFlow('sheet');
+        setSubModal('none');
+        setShowAudienceMenu(false);
         setIsAnimating(false);
       }, 200);
     };
@@ -2013,12 +2026,17 @@ export const ShareBottomSheet = memo(
         alert('Please login to share.');
         return;
       }
+      setIsPosting(true);
       try {
         const endpoint = getShareEndpoint();
         const msg = customMessage !== undefined ? customMessage : shareMessage;
         const payload = {
           ...getSharePayload(destination),
           message: msg,
+          feeling: feeling || undefined,
+          location: location || undefined,
+          taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
+          audience: audience,
         };
         const response = await apiFetch(endpoint, {
           method: 'POST',
@@ -2034,12 +2052,19 @@ export const ShareBottomSheet = memo(
             data: response,
             shares: nextShares,
             message: msg,
+            feeling: feeling || undefined,
+            location: location || undefined,
+            taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
+            audience: audience,
             post: response?.shared_post || response?.post || {
               id: response?.id || Date.now(),
               post_id: response?.id || Date.now(),
               user_id: currentUser?.id,
               author: currentUser,
               content: msg || '',
+              feeling: feeling || undefined,
+              location: location || undefined,
+              taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
               shared_post_id: post.id,
               shared_post: post,
               created_at: new Date().toISOString(),
@@ -2052,9 +2077,11 @@ export const ShareBottomSheet = memo(
             },
           });
         }
+        setIsPosting(false);
         closeSheet();
       } catch (error: any) {
         console.error('Share failed:', error);
+        setIsPosting(false);
         if (onShareComplete)
           onShareComplete(destination, { success: false, error: error.message });
       }
@@ -2073,99 +2100,455 @@ export const ShareBottomSheet = memo(
     if (!isOpen) return null;
 
     if (activeFlow === 'feed' && currentUser) {
-      const ownerAuthor = post.author || {
-        name: post.author_name || post.user?.name || 'User',
-        username: post.author_username || post.user?.username || 'user',
-        profile_image_url: post.author_avatar || post.user?.profile_image_url || null,
-        is_verified: Boolean(post.author_verified || post.user?.is_verified),
+      const ownerAuthor = post?.author || {
+        name: post?.author_name || post?.user?.name || 'User',
+        username: post?.author_username || post?.user?.username || 'user',
+        profile_image_url: post?.author_avatar || post?.user?.profile_image_url || null,
+        is_verified: Boolean(post?.author_verified || post?.user?.is_verified),
       };
+      const authorName = ownerAuthor.name || 'User';
+
+      const hasImages =
+        (Array.isArray(post?.media_urls) && post.media_urls.length > 0) ||
+        (Array.isArray(post?.images) && post.images.length > 0) ||
+        (post?.media_url && !String(post.media_url).match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i));
+
+      const hasVideo =
+        post?.video_url ||
+        post?.videoUrl ||
+        post?.video ||
+        (post?.media_url && String(post.media_url).match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i));
+
+      const isSong =
+        post?.song_id || post?.song || post?.item_type === 'song' || post?.item_type === 'music';
+
+      let cardTitle = `${authorName}'s post`;
+      if (hasImages) {
+        const count = post?.media_urls?.length || post?.images?.length || 1;
+        cardTitle = count > 1 ? `Photos from ${authorName}'s post` : `Photo from ${authorName}'s post`;
+      } else if (hasVideo) {
+        cardTitle = `Video from ${authorName}'s post`;
+      } else if (isSong) {
+        cardTitle = `Song from ${authorName}'s post`;
+      } else {
+        cardTitle = `Post from ${authorName}'s post`;
+      }
+
+      const snippet = post?.content || post?.caption || post?.text || post?.title || post?.description || '';
+
+      const cardThumbnail = (
+        (Array.isArray(post?.media_urls) && post.media_urls[0]) ||
+        (Array.isArray(post?.images) && post.images[0]) ||
+        post?.media_url ||
+        post?.thumbnail ||
+        post?.thumbnail_url ||
+        post?.cover_url ||
+        post?.image ||
+        avatarFrom(ownerAuthor) ||
+        ''
+      );
 
       return (
-        <div className="fixed inset-0 z-[500] bg-[#050B18] flex flex-col animate-slide-up">
-          <div className="flex items-center justify-between p-4 border-b border-[#1E293B]">
-            <div className="flex items-center gap-4">
-              <i
-                className="fas fa-arrow-left text-[#F8FAFC] text-xl cursor-pointer"
-                onClick={() => setActiveFlow('sheet')}
-              ></i>
-              <h3 className="text-[#F8FAFC] text-[21px] font-bold">
-                Share Post to Feed
+        <div className="fixed inset-0 z-[500] bg-white text-gray-900 dark:bg-[#050B18] dark:text-[#F8FAFC] flex flex-col animate-slide-up font-sans">
+          {/* Top header navigation */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-[#1E293B] bg-white dark:bg-[#050B18] sticky top-0 z-20">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (subModal !== 'none') {
+                    setSubModal('none');
+                  } else {
+                    setActiveFlow('sheet');
+                  }
+                }}
+                className="p-1.5 -ml-1 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1E293B] rounded-full transition-colors cursor-pointer"
+                aria-label="Back"
+              >
+                <i className="fas fa-arrow-left text-xl"></i>
+              </button>
+              <h3 className="text-gray-900 dark:text-gray-100 text-[19px] font-bold">
+                {subModal === 'tag'
+                  ? 'Tag Friends'
+                  : subModal === 'location'
+                  ? 'Add Location'
+                  : subModal === 'feeling'
+                  ? 'How are you feeling?'
+                  : 'Share to Feed / Profile'}
               </h3>
             </div>
             <button
-              onClick={() => handleShareAction('feed', shareMessage)}
-              className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-5 py-2 rounded-xl font-bold text-[16px] transition-colors shadow-sm cursor-pointer"
+              type="button"
+              onClick={closeSheet}
+              className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full cursor-pointer"
+              aria-label="Close"
             >
-              SHARE NOW
+              <i className="fas fa-times text-xl"></i>
             </button>
           </div>
-          <div className="flex-1 p-4 overflow-y-auto max-w-2xl mx-auto w-full">
-            {/* Shared User Profile Bar */}
-            <div className="flex items-center gap-3 mb-4">
-              <img
-                src={avatarFrom(currentUser)}
-                alt=""
-                className="w-12 h-12 rounded-full object-cover border border-[#1E293B]"
-              />
-              <div>
-                <div className="text-[#F8FAFC] font-bold text-[21px]">
-                  {currentUser.name}
-                </div>
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-[#1E293B] rounded-lg text-[#94A3B8] text-[13px] font-medium mt-1">
-                  <span>🌍 Public Feed</span>
-                </div>
+
+          {/* Sub modal: Tag Friends */}
+          {subModal === 'tag' && (
+            <div className="flex-1 p-4 flex flex-col overflow-hidden max-w-xl mx-auto w-full">
+              <div className="relative mb-3">
+                <input
+                  type="text"
+                  placeholder="Search friends..."
+                  value={searchFriendQuery}
+                  onChange={(e) => setSearchFriendQuery(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-[#1E293B] text-gray-900 dark:text-[#F8FAFC] px-4 py-2.5 pl-10 rounded-xl text-[16px] outline-none border border-gray-200 dark:border-[#334155]"
+                  autoFocus
+                />
+                <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"></i>
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-1">
+                {users
+                  .filter(
+                    (u) =>
+                      u.id !== currentUser.id &&
+                      (u.name || u.username || '').toLowerCase().includes(searchFriendQuery.toLowerCase())
+                  )
+                  .map((u) => {
+                    const isSelected = taggedFriends.includes(u.id);
+                    return (
+                      <div
+                        key={u.id}
+                        onClick={() => {
+                          setTaggedFriends((prev) =>
+                            isSelected ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                          );
+                        }}
+                        className="flex items-center justify-between p-2.5 hover:bg-gray-100 dark:hover:bg-[#1E293B] rounded-xl cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <img src={avatarFrom(u)} alt="" className="w-10 h-10 rounded-full object-cover" />
+                          <span className="font-semibold text-gray-900 dark:text-gray-100 text-[16px]">
+                            {u.name || u.username}
+                          </span>
+                        </div>
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center border ${
+                            isSelected
+                              ? 'bg-[#1877F2] border-[#1877F2] text-white'
+                              : 'border-gray-300 dark:border-gray-600'
+                          }`}
+                        >
+                          {isSelected && <i className="fas fa-check text-xs"></i>}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubModal('none')}
+                className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold py-3.5 rounded-xl mt-3 text-[16px] transition-colors shadow-md cursor-pointer"
+              >
+                Done ({taggedFriends.length} tagged)
+              </button>
+            </div>
+          )}
+
+          {/* Sub modal: Add location */}
+          {subModal === 'location' && (
+            <div className="flex-1 p-4 flex flex-col overflow-hidden max-w-xl mx-auto w-full">
+              <div className="relative mb-4">
+                <input
+                  type="text"
+                  placeholder="Where are you?"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-[#1E293B] text-gray-900 dark:text-[#F8FAFC] px-4 py-3 pl-10 rounded-xl text-[16px] outline-none border border-gray-200 dark:border-[#334155]"
+                  autoFocus
+                />
+                <i className="fas fa-map-marker-alt absolute left-3.5 top-1/2 -translate-y-1/2 text-[#EC4899]"></i>
+              </div>
+              <div className="text-[13px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+                Popular suggestions
+              </div>
+              <div className="grid grid-cols-2 gap-2 overflow-y-auto">
+                {[
+                  'Nairobi, Kenya',
+                  'Dar es Salaam, TZ',
+                  'Kigali, Rwanda',
+                  'Kampala, Uganda',
+                  'Lagos, Nigeria',
+                  'Johannesburg, SA',
+                  'London, UK',
+                  'New York, USA',
+                  'Dubai, UAE',
+                  'Paris, France',
+                ].map((loc) => (
+                  <button
+                    key={loc}
+                    type="button"
+                    onClick={() => {
+                      setLocation(loc);
+                      setSubModal('none');
+                    }}
+                    className="p-3 bg-gray-50 dark:bg-[#0B1120] border border-gray-200 dark:border-[#1E293B] rounded-xl text-left hover:bg-gray-100 dark:hover:bg-[#1E293B] transition-colors cursor-pointer"
+                  >
+                    <div className="font-semibold text-gray-900 dark:text-gray-100 text-[15px]">{loc}</div>
+                  </button>
+                ))}
+              </div>
+              {location && (
+                <button
+                  type="button"
+                  onClick={() => setSubModal('none')}
+                  className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold py-3.5 rounded-xl mt-4 text-[16px] transition-colors shadow-md cursor-pointer"
+                >
+                  Confirm Location
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Sub modal: Feelings */}
+          {subModal === 'feeling' && (
+            <div className="flex-1 p-4 overflow-y-auto max-w-xl mx-auto w-full">
+              <div className="grid grid-cols-2 gap-2.5">
+                {[
+                  { label: 'Happy', emoji: '😊' },
+                  { label: 'Blessed', emoji: '🙏' },
+                  { label: 'Loved', emoji: '❤️' },
+                  { label: 'Excited', emoji: '🤩' },
+                  { label: 'Thankful', emoji: '🙌' },
+                  { label: 'Cool', emoji: '😎' },
+                  { label: 'Relaxed', emoji: '😌' },
+                  { label: 'Celebrating', emoji: '🥳' },
+                  { label: 'Proud', emoji: '🦁' },
+                  { label: 'Crazy', emoji: '😜' },
+                  { label: 'Sad', emoji: '😢' },
+                  { label: 'Tired', emoji: '🥱' },
+                ].map((f) => (
+                  <button
+                    key={f.label}
+                    type="button"
+                    onClick={() => {
+                      setFeeling(f.label);
+                      setSubModal('none');
+                    }}
+                    className={`p-3 rounded-xl border flex items-center gap-3 transition-colors cursor-pointer ${
+                      feeling === f.label
+                        ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-400 text-amber-700 dark:text-amber-300 font-bold'
+                        : 'bg-gray-50 dark:bg-[#0B1120] border-gray-200 dark:border-[#1E293B] text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#1E293B]'
+                    }`}
+                  >
+                    <span className="text-2xl">{f.emoji}</span>
+                    <span className="text-[16px]">{f.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
+          )}
 
-            {/* Thoughts / Caption input */}
-            <textarea
-              value={shareMessage}
-              onChange={(e) => setShareMessage(e.target.value)}
-              className="w-full bg-transparent text-[#F8FAFC] placeholder-[#94A3B8] text-[19px] outline-none resize-none min-h-[90px] mb-4"
-              placeholder="Say something about this post..."
-              autoFocus
-            ></textarea>
+          {/* Main share page layout matching screenshot */}
+          {subModal === 'none' && (
+            <div className="flex-1 overflow-y-auto px-4 py-4 max-w-xl mx-auto w-full flex flex-col justify-between">
+              <div>
+                {/* User Profile Bar */}
+                <div className="flex items-center gap-3 mb-3 relative">
+                  <img
+                    src={avatarFrom(currentUser)}
+                    alt={currentUser.name}
+                    className="w-14 h-14 rounded-md object-cover border border-gray-200 dark:border-[#1E293B] shadow-sm flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center flex-wrap gap-1">
+                      <span className="text-gray-900 dark:text-gray-100 font-bold text-[21px] leading-snug">
+                        {currentUser.name}
+                      </span>
+                      {feeling && (
+                        <span className="text-[15px] text-gray-600 dark:text-gray-300">
+                          {' '}is feeling <span className="font-semibold text-gray-900 dark:text-gray-100">{feeling}</span>
+                        </span>
+                      )}
+                      {location && (
+                        <span className="text-[15px] text-gray-600 dark:text-gray-300">
+                          {' '}in <span className="font-semibold text-gray-900 dark:text-gray-100">{location}</span>
+                        </span>
+                      )}
+                      {taggedFriends.length > 0 && (
+                        <span className="text-[15px] text-gray-600 dark:text-gray-300">
+                          {' '}with <span className="font-semibold text-gray-900 dark:text-gray-100">{taggedFriends.length} others</span>
+                        </span>
+                      )}
+                    </div>
 
-            {/* Facebook-style Original Post Preview inside composer */}
-            <div className="border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-3.5 flex items-center gap-2.5 border-b border-[#1E293B]/60 bg-[#0F172A]/50">
-                <img
-                  src={avatarFrom(ownerAuthor)}
-                  alt=""
-                  className="w-10 h-10 rounded-full object-cover border border-[#1E293B]"
+                    {/* Share with: Public dropdown */}
+                    <div className="relative inline-block mt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowAudienceMenu(!showAudienceMenu)}
+                        className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer text-[17px] font-normal"
+                      >
+                        <i className="fas fa-globe-americas text-[#1877F2] text-[18px]"></i>
+                        <span>Share with: {audience}</span>
+                        <i className="fas fa-caret-down text-gray-500 text-[14px] ml-0.5"></i>
+                      </button>
+
+                      {/* Audience selector dropdown */}
+                      {showAudienceMenu && (
+                        <div className="absolute left-0 mt-1.5 w-52 bg-white dark:bg-[#0B1120] border border-gray-200 dark:border-[#1E293B] rounded-xl shadow-xl z-20 py-1 overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAudience('Public');
+                              setShowAudienceMenu(false);
+                            }}
+                            className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left text-[15px] hover:bg-gray-100 dark:hover:bg-[#1E293B] cursor-pointer ${
+                              audience === 'Public' ? 'font-bold text-[#1877F2]' : 'text-gray-800 dark:text-gray-200'
+                            }`}
+                          >
+                            <i className="fas fa-globe-americas text-[#1877F2] w-5 text-center"></i>
+                            <div>
+                              <div className="font-semibold">Public</div>
+                              <div className="text-[12px] text-gray-500 font-normal">Anyone on UNERA</div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAudience('Friends');
+                              setShowAudienceMenu(false);
+                            }}
+                            className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left text-[15px] hover:bg-gray-100 dark:hover:bg-[#1E293B] cursor-pointer ${
+                              audience === 'Friends' ? 'font-bold text-[#1877F2]' : 'text-gray-800 dark:text-gray-200'
+                            }`}
+                          >
+                            <i className="fas fa-user-friends text-[#45BD62] w-5 text-center"></i>
+                            <div>
+                              <div className="font-semibold">Friends</div>
+                              <div className="text-[12px] text-gray-500 font-normal">Your friends only</div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAudience('Only Me');
+                              setShowAudienceMenu(false);
+                            }}
+                            className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left text-[15px] hover:bg-gray-100 dark:hover:bg-[#1E293B] cursor-pointer ${
+                              audience === 'Only Me' ? 'font-bold text-[#1877F2]' : 'text-gray-800 dark:text-gray-200'
+                            }`}
+                          >
+                            <i className="fas fa-lock text-[#E11D48] w-5 text-center"></i>
+                            <div>
+                              <div className="font-semibold">Only Me</div>
+                              <div className="text-[12px] text-gray-500 font-normal">Only you can see this</div>
+                            </div>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Write something textarea */}
+                <textarea
+                  value={shareMessage}
+                  onChange={(e) => setShareMessage(e.target.value)}
+                  placeholder="Write something"
+                  className="w-full bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 text-[19px] outline-none resize-none min-h-[90px] py-1 mb-2 leading-relaxed border-none focus:ring-0"
+                  autoFocus
                 />
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-[#F8FAFC] text-[20px]">
-                      {ownerAuthor.name}
-                    </span>
-                    {ownerAuthor.is_verified && (
-                      <VerifiedBadge size={18} className="shrink-0" />
+
+                {/* Shared Post Preview Box (Exact layout as screenshot) */}
+                <div className="border border-gray-300 dark:border-[#334155] bg-white dark:bg-[#0A101F] rounded-none sm:rounded-md overflow-hidden mb-4 flex items-stretch shadow-sm">
+                  {/* Left: Media Thumbnail */}
+                  <div className="w-24 h-24 sm:w-28 sm:h-28 bg-gray-100 dark:bg-black/30 flex-shrink-0 flex items-center justify-center overflow-hidden border-r border-gray-200 dark:border-[#1E293B]">
+                    {cardThumbnail ? (
+                      <img
+                        src={cardThumbnail}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <i className="fas fa-file-alt text-3xl text-gray-400"></i>
                     )}
                   </div>
-                  <div className="text-[#94A3B8] text-[13px]">
-                    @{ownerAuthor.username || 'user'}
+
+                  {/* Right: Title, Snippet, Author */}
+                  <div className="flex-1 p-2.5 sm:p-3 min-w-0 flex flex-col justify-center">
+                    <div className="font-bold text-[17px] text-gray-900 dark:text-gray-100 truncate mb-0.5">
+                      {cardTitle}
+                    </div>
+                    <div className="text-[15px] text-gray-800 dark:text-gray-200 line-clamp-1 mb-1">
+                      {snippet ? (snippet.length > 55 ? `${snippet.slice(0, 55)}...` : snippet) : '...'}
+                    </div>
+                    <div className="text-[15px] text-gray-500 dark:text-gray-400 truncate">
+                      {authorName}
+                    </div>
                   </div>
+                </div>
+
+                {/* Action Items: Tag Friends, Add location, Feeling/activity */}
+                <div className="space-y-3.5 mb-6 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSubModal('tag')}
+                    className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
+                  >
+                    <i className="fas fa-user-plus text-[#1877F2] text-xl w-6 text-center"></i>
+                    <span className="text-[17px] font-medium">Tag Friends</span>
+                    {taggedFriends.length > 0 && (
+                      <span className="ml-auto text-[13px] bg-blue-100 dark:bg-blue-900/40 text-[#1877F2] px-2 py-0.5 rounded-full font-semibold">
+                        {taggedFriends.length} selected
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSubModal('location')}
+                    className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
+                  >
+                    <i className="fas fa-map-marker-alt text-[#EC4899] text-xl w-6 text-center"></i>
+                    <span className="text-[17px] font-medium">Add location</span>
+                    {location && (
+                      <span className="ml-auto text-[13px] bg-pink-100 dark:bg-pink-900/40 text-[#EC4899] px-2 py-0.5 rounded-full font-semibold truncate max-w-[150px]">
+                        {location}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSubModal('feeling')}
+                    className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
+                  >
+                    <i className="far fa-smile text-[#F59E0B] text-xl w-6 text-center"></i>
+                    <span className="text-[17px] font-medium">Feeling/activity</span>
+                    {feeling && (
+                      <span className="ml-auto text-[13px] bg-amber-100 dark:bg-amber-900/40 text-[#F59E0B] px-2 py-0.5 rounded-full font-semibold">
+                        {feeling}
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
 
-              {textPreview && (
-                <div className="p-3.5 text-[#F8FAFC] text-[16px] leading-relaxed">
-                  {textPreview}
-                </div>
-              )}
-
-              {previewUrl && (
-                <div className="w-full max-h-[320px] bg-black overflow-hidden flex items-center justify-center">
-                  <img
-                    src={previewUrl}
-                    alt=""
-                    className="w-full max-h-[320px] object-cover"
-                  />
-                </div>
-              )}
+              {/* POST Button (Full width blue button) */}
+              <div className="mt-auto pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => handleShareAction('feed')}
+                  disabled={isPosting}
+                  className="w-full bg-[#1877F2] hover:bg-[#166FE5] active:bg-[#1565C0] text-white font-bold text-[18px] tracking-wide py-3.5 rounded-lg transition-colors shadow-md uppercase cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {isPosting ? (
+                    <>
+                      <i className="fas fa-spinner fa-spin"></i>
+                      <span>POSTING...</span>
+                    </>
+                  ) : (
+                    <span>POST</span>
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       );
     }
@@ -2368,10 +2751,10 @@ export const ShareBottomSheet = memo(
                 </div>
                 <div className="flex-1 text-left">
                   <div className="text-[#F8FAFC] font-medium text-[17px]">
-                    Share to UNERA Feed
+                    Share to Feed / Profile
                   </div>
                   <div className="text-[#94A3B8] text-[13px] mt-0.5">
-                    Share to your profile feed
+                    Share to your profile & public feed
                   </div>
                 </div>
                 <i className="fas fa-chevron-right text-[#94A3B8] text-[15px]"></i>
