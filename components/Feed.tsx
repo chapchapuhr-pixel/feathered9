@@ -1919,8 +1919,12 @@ export const ShareBottomSheet = memo(
       'sheet'
     );
     const [isAnimating, setIsAnimating] = useState(false);
+    const [shareMessage, setShareMessage] = useState('');
+    const [copiedLink, setCopiedLink] = useState(false);
     const sheetRef = useRef<HTMLDivElement>(null);
     const backdropRef = useRef<HTMLDivElement>(null);
+
+    const canonicalPostUrl = `https://featheredsocial.site/post/${getFeedItemId(post)}`;
 
     const getShareEndpoint = () => {
       const itemType = getFeedItemType(post);
@@ -1952,6 +1956,7 @@ export const ShareBottomSheet = memo(
         shared_at: new Date().toISOString(),
         item_type: itemType,
         post_id: itemId,
+        message: shareMessage,
       };
       
       switch (itemType) {
@@ -2003,14 +2008,18 @@ export const ShareBottomSheet = memo(
       }, 200);
     };
 
-    const handleShareAction = async (destination: string) => {
+    const handleShareAction = async (destination: string, customMessage?: string) => {
       if (!currentUser) {
         alert('Please login to share.');
         return;
       }
       try {
         const endpoint = getShareEndpoint();
-        const payload = getSharePayload(destination);
+        const msg = customMessage !== undefined ? customMessage : shareMessage;
+        const payload = {
+          ...getSharePayload(destination),
+          message: msg,
+        };
         const response = await apiFetch(endpoint, {
           method: 'POST',
           body: JSON.stringify(payload),
@@ -2024,6 +2033,23 @@ export const ShareBottomSheet = memo(
             success: true,
             data: response,
             shares: nextShares,
+            message: msg,
+            post: response?.shared_post || response?.post || {
+              id: response?.id || Date.now(),
+              post_id: response?.id || Date.now(),
+              user_id: currentUser?.id,
+              author: currentUser,
+              content: msg || '',
+              shared_post_id: post.id,
+              shared_post: post,
+              created_at: new Date().toISOString(),
+              shares: 0,
+              shares_count: 0,
+              likes_count: 0,
+              reactions_count: 0,
+              reactions: [],
+              comments: [],
+            },
           });
         }
         closeSheet();
@@ -2034,7 +2060,7 @@ export const ShareBottomSheet = memo(
       }
     };
 
-    const textPreview = getPostTextPreview(post, 100);
+    const textPreview = getPostTextPreview(post, 120);
     const previewUrl = useMemo(() => {
       return (
         (Array.isArray(post?.media_urls) && post.media_urls[0]) ||
@@ -2047,6 +2073,13 @@ export const ShareBottomSheet = memo(
     if (!isOpen) return null;
 
     if (activeFlow === 'feed' && currentUser) {
+      const ownerAuthor = post.author || {
+        name: post.author_name || post.user?.name || 'User',
+        username: post.author_username || post.user?.username || 'user',
+        profile_image_url: post.author_avatar || post.user?.profile_image_url || null,
+        is_verified: Boolean(post.author_verified || post.user?.is_verified),
+      };
+
       return (
         <div className="fixed inset-0 z-[500] bg-[#050B18] flex flex-col animate-slide-up">
           <div className="flex items-center justify-between p-4 border-b border-[#1E293B]">
@@ -2055,39 +2088,83 @@ export const ShareBottomSheet = memo(
                 className="fas fa-arrow-left text-[#F8FAFC] text-xl cursor-pointer"
                 onClick={() => setActiveFlow('sheet')}
               ></i>
-              <h3 className="text-[#F8FAFC] text-[22px] font-medium">
-                Share to UNERA Feed
+              <h3 className="text-[#F8FAFC] text-[21px] font-bold">
+                Share Post to Feed
               </h3>
             </div>
             <button
-              onClick={() => handleShareAction('feed')}
-              className="text-[#1877F2] font-bold text-[19px]"
+              onClick={() => handleShareAction('feed', shareMessage)}
+              className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-5 py-2 rounded-xl font-bold text-[16px] transition-colors shadow-sm cursor-pointer"
             >
-              POST
+              SHARE NOW
             </button>
           </div>
-          <div className="flex-1 p-4">
+          <div className="flex-1 p-4 overflow-y-auto max-w-2xl mx-auto w-full">
+            {/* Shared User Profile Bar */}
             <div className="flex items-center gap-3 mb-4">
               <img
                 src={avatarFrom(currentUser)}
                 alt=""
-                className="w-12 h-12 rounded-full object-cover"
+                className="w-12 h-12 rounded-full object-cover border border-[#1E293B]"
               />
               <div>
-                <div className="text-[#F8FAFC] font-bold text-[17px]">
+                <div className="text-[#F8FAFC] font-bold text-[21px]">
                   {currentUser.name}
                 </div>
-                <select className="bg-[#1E293B] text-[#F8FAFC] text-[15px] px-3 py-1 rounded-lg mt-1 border border-[#1E293B]">
-                  <option>🌍 Public</option>
-                  <option>👥 Friends</option>
-                  <option>🔒 Only me</option>
-                </select>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-[#1E293B] rounded-lg text-[#94A3B8] text-[13px] font-medium mt-1">
+                  <span>🌍 Public Feed</span>
+                </div>
               </div>
             </div>
+
+            {/* Thoughts / Caption input */}
             <textarea
-              className="w-full bg-transparent text-[#F8FAFC] placeholder-[#94A3B8] text-[22px] outline-none resize-none min-h-[200px]"
-              placeholder="Write something..."
+              value={shareMessage}
+              onChange={(e) => setShareMessage(e.target.value)}
+              className="w-full bg-transparent text-[#F8FAFC] placeholder-[#94A3B8] text-[19px] outline-none resize-none min-h-[90px] mb-4"
+              placeholder="Say something about this post..."
+              autoFocus
             ></textarea>
+
+            {/* Facebook-style Original Post Preview inside composer */}
+            <div className="border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden shadow-sm">
+              <div className="p-3.5 flex items-center gap-2.5 border-b border-[#1E293B]/60 bg-[#0F172A]/50">
+                <img
+                  src={avatarFrom(ownerAuthor)}
+                  alt=""
+                  className="w-10 h-10 rounded-full object-cover border border-[#1E293B]"
+                />
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-[#F8FAFC] text-[20px]">
+                      {ownerAuthor.name}
+                    </span>
+                    {ownerAuthor.is_verified && (
+                      <VerifiedBadge size={18} className="shrink-0" />
+                    )}
+                  </div>
+                  <div className="text-[#94A3B8] text-[13px]">
+                    @{ownerAuthor.username || 'user'}
+                  </div>
+                </div>
+              </div>
+
+              {textPreview && (
+                <div className="p-3.5 text-[#F8FAFC] text-[16px] leading-relaxed">
+                  {textPreview}
+                </div>
+              )}
+
+              {previewUrl && (
+                <div className="w-full max-h-[320px] bg-black overflow-hidden flex items-center justify-center">
+                  <img
+                    src={previewUrl}
+                    alt=""
+                    className="w-full max-h-[320px] object-cover"
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       );
@@ -2344,7 +2421,7 @@ export const ShareBottomSheet = memo(
 
               <button
                 onClick={() => {
-                  const text = `Check out this post on UNERA: ${window.location.origin}/post/${getFeedItemId(post)}`;
+                  const text = `Check out this post: ${canonicalPostUrl}`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
                   handleShareAction('whatsapp');
                 }}
@@ -2365,21 +2442,66 @@ export const ShareBottomSheet = memo(
 
               <button
                 onClick={() => {
-                  const url = `${window.location.origin}/post/${getFeedItemId(post)}`;
-                  navigator.clipboard.writeText(url);
+                  window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(canonicalPostUrl)}`, '_blank');
+                  handleShareAction('facebook');
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-[#1E293B] active:bg-[#334155] transition-all duration-200 group"
+              >
+                <div className="w-10 h-10 rounded-full bg-[#1877F215] flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+                  <i className="fab fa-facebook-f text-[#1877F2] text-lg"></i>
+                </div>
+                <div className="flex-1 text-left">
+                  <div className="text-[#F8FAFC] font-medium text-[17px]">
+                    Share to Facebook
+                  </div>
+                  <div className="text-[#94A3B8] text-[13px] mt-0.5">
+                    Post to Facebook
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  window.open(`https://twitter.com/intent/tweet?url=${encodeURIComponent(canonicalPostUrl)}&text=${encodeURIComponent(textPreview || 'Check out this post')}`, '_blank');
+                  handleShareAction('twitter');
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-[#1E293B] active:bg-[#334155] transition-all duration-200 group"
+              >
+                <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+                  <i className="fab fa-x-twitter text-white text-lg"></i>
+                </div>
+                <div className="flex-1 text-left">
+                  <div className="text-[#F8FAFC] font-medium text-[17px]">
+                    Share to X (Twitter)
+                  </div>
+                  <div className="text-[#94A3B8] text-[13px] mt-0.5">
+                    Tweet link
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(canonicalPostUrl);
+                  setCopiedLink(true);
+                  setTimeout(() => setCopiedLink(false), 2000);
                   handleShareAction('link');
                 }}
                 className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-[#1E293B] active:bg-[#334155] transition-all duration-200 group"
               >
                 <div className="w-10 h-10 rounded-full bg-[#1877F215] flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
-                  <i className="fas fa-link text-[#1877F2] text-lg"></i>
+                  {copiedLink ? (
+                    <i className="fas fa-check text-green-400 text-lg"></i>
+                  ) : (
+                    <i className="fas fa-link text-[#1877F2] text-lg"></i>
+                  )}
                 </div>
                 <div className="flex-1 text-left">
                   <div className="text-[#F8FAFC] font-medium text-[17px]">
-                    Copy Post Link
+                    {copiedLink ? 'Link Copied!' : 'Copy Post Link'}
                   </div>
-                  <div className="text-[#94A3B8] text-[13px] mt-0.5">
-                    Copy link to clipboard
+                  <div className="text-[#94A3B8] text-[13px] mt-0.5 truncate max-w-[280px]">
+                    {canonicalPostUrl}
                   </div>
                 </div>
               </button>
@@ -5850,7 +5972,7 @@ export const ReactionButton = memo(
 
     const handleMouseEnter = () => {
       if (isGuest) return;
-      timerRef.current = setTimeout(() => setShowDock(true), 500);
+      timerRef.current = setTimeout(() => setShowDock(true), 350);
     };
 
     const handleMouseLeave = () => {
@@ -5865,7 +5987,7 @@ export const ReactionButton = memo(
         setShowDock(true);
         setShowPreview(true);
         setPreviewEmoji('👍');
-      }, 600);
+      }, 400);
     };
 
     const handleTouchEnd = () => {
@@ -5875,15 +5997,18 @@ export const ReactionButton = memo(
       setTimeout(() => setShowPreview(false), 300);
     };
 
-    const handleClick = () => {
+    const handleClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
       if (isGuest) return alert('Please login to react.');
+      setIsAnimating(true);
       if (currentUserReactions) {
-        setIsAnimating(true);
         onReact(currentUserReactions);
-        setTimeout(() => setIsAnimating(false), 300);
       } else {
-        setShowDock(!showDock);
+        onReact('like');
       }
+      setShowDock(false);
+      setShowPreview(false);
+      setTimeout(() => setIsAnimating(false), 300);
     };
 
     const handleDockReact = (type: ReactionType) => {
@@ -5914,7 +6039,7 @@ export const ReactionButton = memo(
         onTouchCancel={handleTouchEnd}
       >
         {showPreview && (
-          <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0B1120] rounded-full shadow-2xl p-3 border border-[#1E293B] z-50 reaction-preview">
+          <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0B1120] rounded-full shadow-2xl p-3 border border-[#1E293B] z-[260] reaction-preview">
             <div className="text-4xl">{previewEmoji}</div>
           </div>
         )}
@@ -5922,13 +6047,13 @@ export const ReactionButton = memo(
         {showDock && (
           <div
             ref={dockRef}
-            className="absolute -top-16 left-0 bg-[#0B1120] rounded-full shadow-2xl p-2 border border-[#1E293B] z-50 react-pop flex items-center"
+            className="absolute -top-14 left-0 bg-[#0B1120]/95 backdrop-blur-md rounded-full shadow-2xl p-2 border border-[#334155] z-[250] react-pop flex items-center"
           >
             <div className="flex gap-1 overflow-x-auto max-w-[320px] scrollbar-hide px-1 py-1">
               {reactionConfig.map((r) => (
                 <div
                   key={r.type}
-                  className="text-3xl react-hover cursor-pointer p-1 rounded-full hover:bg-[#1E293B] transition-colors flex-shrink-0"
+                  className="text-3xl react-hover cursor-pointer p-1 rounded-full hover:bg-[#1E293B] transition-transform hover:scale-125 flex-shrink-0"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleDockReact(r.type as ReactionType);
@@ -5945,8 +6070,11 @@ export const ReactionButton = memo(
 
         <button
           onClick={handleClick}
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setShowDock((prev) => !prev);
+          }}
           className={`flex items-center gap-1.5 text-white transition-transform active:scale-125 focus:outline-none p-1 rounded-lg hover:bg-[#1E293B]/60 ${
             isAnimating ? 'scale-125' : ''
           }`}
@@ -6384,6 +6512,51 @@ export const Post = memo(
     const createdAtLabel = formatRelativeTime(p.created_at);
     const postId = getFeedItemId(p);
 
+    const isSharedPost = Boolean(p.shared_post || p.shared_post_id);
+    const originalPost = p.shared_post || (p.shared_post_id && (p as any)._originalPost) || null;
+    const ownerAuthor = useMemo(() => {
+      if (!originalPost) return null;
+      return (
+        originalPost.author ||
+        (originalPost.user_id && users?.find((u) => Number(u.id) === Number(originalPost.user_id))) || {
+          id: originalPost.user_id,
+          name: originalPost.author_name || originalPost.author?.name || 'User',
+          username: originalPost.author_username || originalPost.author?.username || 'user',
+          profile_image_url:
+            originalPost.author_image ||
+            originalPost.author_avatar ||
+            originalPost.author?.profile_image_url ||
+            null,
+          is_verified: Boolean(originalPost.author_verified || originalPost.author?.is_verified),
+        }
+      );
+    }, [originalPost, users]);
+
+    const origMediaInfo = useMemo(() => {
+      if (!originalPost) return null;
+      const rawUrls = Array.isArray(originalPost.media_urls)
+        ? originalPost.media_urls
+        : typeof originalPost.media_urls === 'string'
+        ? (() => { try { return JSON.parse(originalPost.media_urls); } catch { return []; } })()
+        : Array.isArray(originalPost.images)
+        ? originalPost.images
+        : originalPost.media_url
+        ? [originalPost.media_url]
+        : [];
+      const urls: string[] = rawUrls.filter(Boolean);
+      const isVid = Boolean(
+        originalPost.video_url ||
+        originalPost.media_type === 'video' ||
+        originalPost.type === 'video' ||
+        (typeof urls[0] === 'string' && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(urls[0]))
+      );
+      return {
+        urls,
+        isVideo: isVid,
+        videoUrl: originalPost.video_url || (isVid ? urls[0] : null),
+      };
+    }, [originalPost]);
+
     const mediaInfo = getMediaTypeInfo(p);
     const mediaList = useMemo(() => getPostMediaList(p), [p]);
     const imageMedia = mediaList.filter((m) => m.kind === 'image');
@@ -6713,7 +6886,15 @@ export const Post = memo(
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 text-[#94A3B8] text-[15px]">
-                      {isSponsored ? (
+                      {isSharedPost ? (
+                        <>
+                          <span className="text-[#38BDF8] font-medium">shared a post</span>
+                          <span>•</span>
+                          <span>{createdAtLabel}</span>
+                          <span>•</span>
+                          <i className="fas fa-globe-americas text-[14px]"></i>
+                        </>
+                      ) : isSponsored ? (
                         <>
                           <span className="font-semibold text-[#E2E8F0]">Ad</span>
                           <span>•</span>
@@ -6877,13 +7058,146 @@ export const Post = memo(
                     onProfileClick={onProfileClick}
                     onHashtagClick={onHashtagClick}
                     maxWords={14}
-                    fontSizePx={23}
+                    fontSizePx={isSharedPost ? 18 : 23}
                   />
                 </div>
               );
             })()}
 
-            {(isMusic || isPodcast) && (
+            {isSharedPost && (
+              <div 
+                className="mx-3 md:mx-4 mb-3 border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden shadow-sm hover:border-[#475569] transition-all"
+              >
+                {originalPost ? (
+                  <>
+                    {/* Owner Header */}
+                    <div className="p-3 md:p-3.5 flex items-center justify-between border-b border-[#1E293B]/60 bg-[#0F172A]/50">
+                      <div
+                        className="flex items-center gap-2.5 min-w-0 cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (ownerAuthor?.id) onProfileClick(safeUserId(ownerAuthor));
+                        }}
+                      >
+                        <img
+                          src={avatarFrom(ownerAuthor)}
+                          alt=""
+                          className="w-10 h-10 rounded-full object-cover border border-[#1E293B]"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h5 className="font-bold text-[#F8FAFC] text-[20px] hover:underline cursor-pointer truncate">
+                              {ownerAuthor.name || 'User'}
+                            </h5>
+                            {ownerAuthor.is_verified && (
+                              <VerifiedBadge size={20} className="shrink-0" />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[#94A3B8] text-[13px]">
+                            <span>@{ownerAuthor.username || 'user'}</span>
+                            {originalPost.created_at && (
+                              <>
+                                <span>•</span>
+                                <span>{formatRelativeTime(originalPost.created_at)}</span>
+                              </>
+                            )}
+                            <span>•</span>
+                            <i className="fas fa-globe-americas text-[12px]" title="Public"></i>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Owner Description / Content */}
+                    {originalPost.content && (
+                      <div className="p-3 md:p-3.5 text-[#F8FAFC]">
+                        <ExpandableRichText
+                          text={originalPost.content}
+                          users={users}
+                          onProfileClick={onProfileClick}
+                          onHashtagClick={onHashtagClick}
+                          maxWords={25}
+                          fontSizePx={17}
+                        />
+                      </div>
+                    )}
+
+                    {/* Owner Media */}
+                    {origMediaInfo && origMediaInfo.urls.length > 0 && (
+                      <div className="w-full bg-black">
+                        {origMediaInfo.isVideo ? (
+                          <div
+                            className="cursor-pointer relative min-h-[260px] max-h-[480px] bg-black overflow-hidden"
+                            onClick={() => onVideoClick(originalPost)}
+                          >
+                            <video
+                              src={origMediaInfo.videoUrl || origMediaInfo.urls[0]}
+                              className="w-full h-full max-h-[480px] object-contain bg-black"
+                              preload="metadata"
+                              playsInline
+                              controls
+                            />
+                          </div>
+                        ) : (
+                          <MediaGrid
+                            media={origMediaInfo.urls.map((u: string) => ({
+                              url: u,
+                              thumb: u,
+                              feed: u,
+                              full: u,
+                            }))}
+                            onOpen={(url, index) => {
+                              openGallery(origMediaInfo.urls, index, url);
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {/* Owner Audio Preview if audio post */}
+                    {(originalPost.song_url || originalPost.audio_url || originalPost.item_type === 'music' || originalPost.item_type === 'song') && (
+                      <div className="p-3 border-t border-[#1E293B] bg-[#0B1120] flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-[#1877F2]/20 flex items-center justify-center text-[#1877F2]">
+                            <i className="fas fa-music"></i>
+                          </div>
+                          <div>
+                            <div className="text-[15px] font-bold text-[#F8FAFC]">
+                              {originalPost.song_title || originalPost.title || 'Audio Track'}
+                            </div>
+                            <div className="text-[13px] text-[#94A3B8]">
+                              {originalPost.artist_name || originalPost.author_name || 'Music'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
+                        <i className="fas fa-link text-lg"></i>
+                      </div>
+                      <div>
+                        <div className="text-[17px] font-bold text-[#F8FAFC]">Original Post</div>
+                        <div className="text-[13px] text-[#38BDF8]">
+                          https://featheredsocial.site/post/{p.shared_post_id}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => window.open(`https://featheredsocial.site/post/${p.shared_post_id}`, '_blank')}
+                      className="bg-[#1877F2] text-white px-4 py-1.5 rounded-lg text-[14px] font-bold hover:bg-[#166FE5]"
+                    >
+                      View Post
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(isMusic || isPodcast) && !isSharedPost && (
               <div className="mx-3 md:mx-4 mb-3 bg-[#0B1120] border border-[#1E293B] rounded-2xl overflow-hidden">
                 <div className="flex items-center gap-3 p-3">
                   <img
@@ -6917,7 +7231,7 @@ export const Post = memo(
               </div>
             )}
 
-            {p.link_preview && !mediaInfo.mediaUrl && !isMarketplace && (
+            {p.link_preview && !mediaInfo.mediaUrl && !isMarketplace && !isSharedPost && (
               <div
                 className="w-full mb-2.5 bg-[#0B1120] border-y border-[#1E293B]/70 overflow-hidden cursor-pointer hover:bg-[#141E33] transition-colors"
                 onClick={() =>
@@ -6950,7 +7264,7 @@ export const Post = memo(
               </div>
             )}
 
-            {p.background && !mediaInfo.mediaUrl && !isMarketplace && (
+            {p.background && !mediaInfo.mediaUrl && !isMarketplace && !isSharedPost && (
               <div
                 className="h-[300px] flex items-center justify-center p-8 text-center text-white font-bold text-2xl"
                 style={{ background: p.background, backgroundSize: 'cover' }}
@@ -7132,7 +7446,7 @@ export const Post = memo(
               </>
             ) : (
               <>   
-                {!p.background && imageMedia.length > 0 && (
+                {!isSharedPost && !p.background && imageMedia.length > 0 && (
                   <MediaGrid
                     media={imageMedia.map((m) => ({
                       url: m.feed || m.url,
@@ -7147,7 +7461,7 @@ export const Post = memo(
                   />
                 )}
 
-                {!p.background && videoMedia.length > 0 && (
+                {!isSharedPost && !p.background && videoMedia.length > 0 && (
                   <div
                     className="cursor-pointer relative min-h-[320px] max-h-[540px] bg-black rounded-lg overflow-hidden my-2"
                     onClick={() => onVideoClick(post)}
@@ -7168,7 +7482,7 @@ export const Post = memo(
                   </div>
                 )}
 
-                {!p.background && mediaInfo.mediaUrl && mediaInfo.isAudio && onPlayAudioTrack && (
+                {!isSharedPost && !p.background && mediaInfo.mediaUrl && mediaInfo.isAudio && onPlayAudioTrack && (
                   <div className="my-3">
                     {(() => {
                       const cover =

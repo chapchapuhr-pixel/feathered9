@@ -287,6 +287,8 @@ export interface Post {
   background?: string;
 
   shared_post_id?: number;
+  shared_post?: Post | any;
+  shared_user?: User | any;
   link_preview?: LinkPreview;
 
   group_id?: number;

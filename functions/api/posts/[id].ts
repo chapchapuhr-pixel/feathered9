@@ -4,7 +4,7 @@ type Env = { DB: D1Database };
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "DELETE,PUT,PATCH,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,DELETE,PUT,PATCH,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, x-user-id",
 };
 
@@ -45,6 +45,64 @@ const guessTypeFromUrl = (url: string) => {
 
 export const onRequestOptions: PagesFunction = async () =>
   new Response(null, { status: 204, headers: cors });
+
+/* =========================================================
+   GET — fetch single post with author, reactions, and shared_post
+   ========================================================= */
+export const onRequestGet: PagesFunction<Env> = async ({ request, env, params }) => {
+  try {
+    if (!env.DB) return json({ success: false, error: "DB binding missing" }, 500);
+
+    const postId = toNum((params as any)?.id, 0);
+    if (!postId) return json({ success: false, error: "Invalid post id" }, 400);
+
+    const post = await env.DB
+      .prepare(`
+        SELECT p.*,
+               u.name as author_name,
+               u.username as author_username,
+               u.avatar_url as author_avatar,
+               u.verified as author_verified
+        FROM posts p
+        LEFT JOIN users u ON u.id = p.user_id
+        WHERE p.id = ?
+        LIMIT 1
+      `)
+      .bind(postId)
+      .first<any>();
+
+    if (!post) return json({ success: false, error: "Post not found" }, 404);
+
+    let sharedPost: any = null;
+    const sharedId = toNum(post.shared_post_id, 0);
+    if (sharedId > 0) {
+      sharedPost = await env.DB
+        .prepare(`
+          SELECT p.*,
+                 u.name as author_name,
+                 u.username as author_username,
+                 u.avatar_url as author_avatar,
+                 u.verified as author_verified
+          FROM posts p
+          LEFT JOIN users u ON u.id = p.user_id
+          WHERE p.id = ?
+          LIMIT 1
+        `)
+        .bind(sharedId)
+        .first<any>();
+    }
+
+    return json({
+      success: true,
+      post: {
+        ...post,
+        shared_post: sharedPost,
+      },
+    });
+  } catch (err: any) {
+    return json({ success: false, error: err?.message || "Failed to fetch post" }, 500);
+  }
+};
 
 /* =========================================================
    DELETE — soft delete (author only)

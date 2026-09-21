@@ -47,8 +47,16 @@ const safeNumberHelper = (v: any, fallback = 0) => {
   return Number.isFinite(n) ? n : fallback;
 };
 const safeStringHelper = (v: any, fallback = '') => (typeof v === 'string' ? v : fallback);
-const safePostIdHelper = (p: any) => safeNumberHelper(p?.id ?? p?.post_id ?? p?.postId, 0);
-const safeUserIdHelper = (u: any) => safeNumberHelper(u?.id ?? u?.user_id ?? u?.userId, 0);
+const safePostIdHelper = (p: any) => {
+  if (typeof p === 'number') return p;
+  if (typeof p === 'string' && /^\d+$/.test(p)) return Number(p);
+  return safeNumberHelper(p?.id ?? p?.post_id ?? p?.postId ?? p?.rawId, 0);
+};
+const safeUserIdHelper = (u: any) => {
+  if (typeof u === 'number') return u;
+  if (typeof u === 'string' && /^\d+$/.test(u)) return Number(u);
+  return safeNumberHelper(u?.id ?? u?.user_id ?? u?.userId, 0);
+};
 
 // Add CSS for hiding scrollbar
 const scrollbarHideStyles = `
@@ -420,18 +428,59 @@ export const UserProfile: React.FC<UserProfileProps> = ({
     });
   }, [profilePosts]);
 
-  // ========== FIX 2: GUARDED PROPS SYNC ==========
+  // ========== FIX 2: GUARDED PROPS SYNC (MERGE SAFELY WITHOUT OVERWRITING) ==========
   useEffect(() => {
     const incoming = safeArrayHelper(posts);
 
-    if (incoming.length > 0) {
-      setProfilePosts(incoming);
-      seededFromPropsRef.current = true;
+    // Initial seeding only before profile posts are loaded from API
+    if (!hasLoadedPostsRef.current && !seededFromPropsRef.current) {
+      if (incoming.length > 0) {
+        setProfilePosts(incoming);
+        seededFromPropsRef.current = true;
+      }
       return;
     }
 
-    if (!seededFromPropsRef.current && !hasLoadedPostsRef.current) {
-      setProfilePosts(incoming);
+    // Once profile posts are loaded, if parent props change (reactions, comments, shares),
+    // update matching posts in-place to prevent list flicker or wiped-out pagination.
+    if (incoming.length > 0) {
+      setProfilePosts((prev) => {
+        if (!prev || prev.length === 0) return incoming;
+        const incomingMap = new Map<number, any>();
+        incoming.forEach((p: any) => {
+          const id = safePostIdHelper(p);
+          if (id) incomingMap.set(id, p);
+        });
+
+        let changed = false;
+        const next = prev.map((p: any) => {
+          const id = safePostIdHelper(p);
+          const updated = incomingMap.get(id);
+          if (!updated) return p;
+
+          const myReact = updated.my_reaction ?? updated.myReaction;
+          const reactCount = updated.reactions_count ?? updated.reactionsCount ?? updated.likesCount;
+          const commentCount = updated.comments_count ?? updated.commentCount;
+          const shareCount = updated.shares ?? updated.shares_count;
+
+          changed = true;
+          return {
+            ...p,
+            ...updated,
+            my_reaction: myReact !== undefined ? myReact : p.my_reaction,
+            myReaction: myReact !== undefined ? myReact : p.myReaction,
+            reactions_count: reactCount !== undefined ? reactCount : p.reactions_count,
+            reactionsCount: reactCount !== undefined ? reactCount : p.reactionsCount,
+            likesCount: reactCount !== undefined ? reactCount : p.likesCount,
+            comments_count: commentCount !== undefined ? commentCount : p.comments_count,
+            shares: shareCount !== undefined ? shareCount : p.shares,
+            reactions: updated.reactions || p.reactions,
+            author: p.author || updated.author,
+          };
+        });
+
+        return changed ? next : prev;
+      });
     }
   }, [posts]);
 
@@ -1035,7 +1084,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   // ========== SHARE HANDLER ==========
   const handleShareComplete = (destination: string, data?: any) => {
     if (selectedPostForShare && data?.success) {
-      const newShares = data?.shares || 0;
+      const newShares = data?.shares || (Number(selectedPostForShare.shares || 0) + 1);
       onShare(safePostIdHelper(selectedPostForShare), newShares);
       
       setProfilePosts(prev =>
@@ -1045,6 +1094,28 @@ export const UserProfile: React.FC<UserProfileProps> = ({
             : p
         )
       );
+
+      if (destination === 'feed' || destination === 'profile') {
+        const newSharedItem = data?.post || data?.data?.post || {
+          id: Date.now(),
+          post_id: Date.now(),
+          user_id: currentUser?.id,
+          author: currentUser,
+          content: data?.message || data?.data?.message || '',
+          shared_post_id: safePostIdHelper(selectedPostForShare),
+          shared_post: selectedPostForShare,
+          created_at: new Date().toISOString(),
+          shares: 0,
+          shares_count: 0,
+          likes_count: 0,
+          reactions_count: 0,
+          reactions: [],
+          comments: [],
+        };
+        if (isCurrentUser) {
+          setProfilePosts(prev => [newSharedItem, ...prev]);
+        }
+      }
     }
     setShowShareSheet(false);
     setSelectedPostForShare(null);
@@ -1094,9 +1165,9 @@ export const UserProfile: React.FC<UserProfileProps> = ({
     if (allUserVideos.length === 0) {
       return (
         <div className="text-center p-8">
-          <div className="text-[#B0B3B8] text-lg mb-2">No reels yet</div>
+          <div className="text-[#B0B3B8] text-lg mb-2">No videos yet</div>
           <p className="text-[#B0B3B8] text-sm">
-            {isCurrentUser ? "Create your first reel!" : "This user hasn't uploaded any reels yet."}
+            {isCurrentUser ? "Upload your first video!" : "This user hasn't uploaded any videos yet."}
           </p>
           {isCurrentUser && (
             <button
@@ -1107,7 +1178,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
               }}
               className="mt-4 bg-[#1877F2] text-white px-6 py-2 rounded-lg font-semibold hover:bg-[#166FE5] transition-colors"
             >
-              Create Reel
+              Upload Video
             </button>
           )}
         </div>
@@ -1167,7 +1238,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
               </div>
               <div className="absolute top-2 right-2 text-white text-[11px] bg-black/60 px-2 py-0.5 rounded-full flex items-center gap-1 backdrop-blur-sm border border-white/10 font-semibold">
                 <i className="fas fa-play text-[#38BDF8] text-[9px]"></i>
-                <span>Reel</span>
+                <span>Video</span>
               </div>
             </div>
           ))}
@@ -1179,7 +1250,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
               onClick={() => setVideosPageSize((prev) => prev + 6)}
               className="bg-[#1E293B] hover:bg-[#334155] text-[#F8FAFC] font-semibold px-6 py-2.5 rounded-lg text-[14px] transition-colors flex items-center gap-2 border border-[#334155] shadow-sm"
             >
-              <span>See more reels</span>
+              <span>See more videos</span>
               <i className="fas fa-chevron-down text-xs"></i>
             </button>
           </div>
@@ -1932,7 +2003,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                         : "text-[#94A3B8] border-transparent"
                     }`}
                   >
-                    {tab === "Posts" ? "Posts" : tab === "Videos" ? "Reels" : tab}
+                    {tab === "Posts" ? "Posts" : tab === "Videos" ? "Videos" : tab}
                   </button>
                 ))}
               </div>

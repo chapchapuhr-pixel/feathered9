@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { performPostAction } from "../../postActionRegistry";
 import { EditPostModal } from "./EditPostModal";
-import { Edit, Trash2, Share2, Flag, AlertCircle, Loader2, ArrowLeft } from "lucide-react";
+import { Edit, Trash2, Share2, Flag, AlertCircle, Loader2, ArrowLeft, Link2, Check } from "lucide-react";
 
 export type PostMenuProps = {
   item: any;
@@ -220,6 +220,24 @@ export const PostMenu: React.FC<PostMenuProps> = ({
     alert("Thank you. This report has been submitted to moderators.");
   };
 
+  // ----------------------------
+  // Copy Link
+  // ----------------------------
+  const [copiedLink, setCopiedLink] = useState(false);
+  const handleCopyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `https://featheredsocial.site/post/${itemId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedLink(true);
+      setTimeout(() => {
+        setCopiedLink(false);
+        setOpen(false);
+      }, 1200);
+    }).catch(() => {
+      setOpen(false);
+    });
+  };
+
   return (
     <>
       <div className={`relative ${className}`} ref={menuRef} onClick={(e) => e.stopPropagation()}>
@@ -281,6 +299,25 @@ export const PostMenu: React.FC<PostMenuProps> = ({
             >
               <Share2 className="w-4 h-4 text-[#94A3B8] group-hover:scale-110 transition-transform" />
               <span className="text-sm font-medium">Share</span>
+            </button>
+
+            {/* Copy Link (Canonical shareable URL) */}
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-[#1E293B] text-[#F8FAFC] transition-colors group"
+            >
+              {copiedLink ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400 scale-110 transition-transform" />
+                  <span className="text-sm font-medium text-emerald-400">Link Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Link2 className="w-4 h-4 text-[#38BDF8] group-hover:scale-110 transition-transform" />
+                  <span className="text-sm font-medium">Copy Link</span>
+                </>
+              )}
             </button>
 
             {/* Report Post (Non-Owner Only) */}

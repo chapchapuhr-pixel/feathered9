@@ -341,6 +341,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         p.updated_at AS updated_at,
 
         p.id AS post_id,
+        p.shared_post_id AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -1568,6 +1569,59 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       comments_count: Number((item as any)?.comments_count ?? 0),
       reactions_count: Number((item as any)?.reactions_count ?? 0),
     }));
+
+    // Populate original post for shared posts
+    const sharedPostIds = Array.from(
+      new Set(
+        ordered
+          .map((it: any) => Number((it as any)?.shared_post_id))
+          .filter((id: number) => Boolean(id && !isNaN(id)))
+      )
+    );
+
+    if (sharedPostIds.length > 0) {
+      try {
+        const placeholders = sharedPostIds.map(() => '?').join(',');
+        const origPostsRes = await env.DB.prepare(`
+          SELECT 
+            p.*,
+            u.id as author_id,
+            u.name as author_name,
+            u.username as author_user_name,
+            u.profile_image_url as author_avatar,
+            u.is_verified as author_verified
+          FROM posts p
+          LEFT JOIN users u ON p.user_id = u.id
+          WHERE p.id IN (${placeholders})
+        `).bind(...sharedPostIds).all();
+
+        const origMap = new Map<number, any>();
+        if (Array.isArray(origPostsRes.results)) {
+          origPostsRes.results.forEach((row: any) => {
+            origMap.set(Number(row.id), {
+              ...row,
+              media_urls: parseJsonArrayUrls(row.media_urls),
+              author: {
+                id: row.author_id,
+                name: row.author_name || 'User',
+                user_name: row.author_user_name || '',
+                avatar_url: row.author_avatar || '',
+                avatar: row.author_avatar || '',
+                verified: Boolean(row.author_verified),
+              },
+            });
+          });
+        }
+
+        ordered.forEach((it: any) => {
+          if ((it as any)?.shared_post_id && origMap.has(Number((it as any).shared_post_id))) {
+            (it as any).shared_post = origMap.get(Number((it as any).shared_post_id));
+          }
+        });
+      } catch (err) {
+        console.error('Failed to populate shared_posts in feeds:', err);
+      }
+    }
 
     // ============================================================
     // Merge + dedup PRODUCTS

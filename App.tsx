@@ -1078,6 +1078,23 @@ const normalizePost = (p: any): PostType => {
     interested_count: safeNumber(p?.interested_count),
     my_rsvp_status: p?.my_rsvp_status ?? p?.user_rsvp_status ?? '',
 
+    // Shared post properties (Facebook style post sharing)
+    shared_post_id: p?.shared_post_id ?? p?.sharedPostId ?? (p?.shared_post?.id || null),
+    shared_post: (() => {
+      let sp = p?.shared_post ?? p?.sharedPost;
+      if (typeof sp === 'string') {
+        try { sp = JSON.parse(sp); } catch { sp = null; }
+      }
+      return sp ? normalizePost(sp) : null;
+    })(),
+    shared_user: (() => {
+      let su = p?.shared_user ?? p?.sharedUser;
+      if (typeof su === 'string') {
+        try { su = JSON.parse(su); } catch { su = null; }
+      }
+      return su || null;
+    })(),
+
     // ✅ IMPORTANT: Include feed_key for hybrid identification
     feed_key: p?.feed_key || `${p?.source || p?.item_type || p?.type || 'post'}:${resolvedId}`,
 
@@ -10507,6 +10524,8 @@ const onReactPost = useCallback((postOrId: any, type: ReactionType) => {
     : (posts.find(p => Number(p.id) === Number(postOrId)) || profilePosts.find(p => Number(p.id) === Number(postOrId)));
   if (post) {
     reactToFeedItem(post, type);
+  } else if (postOrId) {
+    reactToFeedItem(postOrId, type);
   }
 }, [posts, profilePosts, reactToFeedItem]);
 
@@ -10545,38 +10564,72 @@ const handleShareComplete = useCallback(
         );
       });
 
-      try {
-        let shareEndpoint = `/api/posts/${activeSharePost.id}/share`;
-        let shareBody: any = { destination, user_id: currentUser?.id };
+      // If shared to Feed or Profile, immediately insert the new shared post card
+      if (destination === 'feed' || destination === 'profile') {
+        const rawNewPost = data?.post || data?.data?.post || {
+          id: Date.now(),
+          post_id: Date.now(),
+          user_id: currentUser?.id,
+          author: currentUser,
+          content: data?.message || data?.data?.message || '',
+          shared_post_id: activeSharePost.id,
+          shared_post: activeSharePost,
+          created_at: new Date().toISOString(),
+          shares: 0,
+          shares_count: 0,
+          likes_count: 0,
+          reactions_count: 0,
+          reactions: [],
+          comments: [],
+        };
 
-        const isGroupPost = !!(activeSharePost.group_id || activeSharePost.item_type === 'group_post');
-        const isSong = !!(activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.item_type === 'song' || activeSharePost.item_type === 'music');
-        const isProduct = !!(activeSharePost.product_id || activeSharePost.item_type === 'product');
-        const isEvent = !!(activeSharePost.event_id || activeSharePost.item_type === 'event');
+        const newSharedItem = normalizePost(rawNewPost);
 
-        if (isGroupPost) {
-          shareEndpoint = `/api/groups/posts/share`;
-          shareBody = { destination, post_id: activeSharePost.id, group_id: activeSharePost.group_id, user_id: currentUser?.id };
-        } else if (isSong) {
-          const songId = activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.id;
-          shareEndpoint = `/api/songs/${songId}/share`;
-          shareBody = { destination, song_id: songId, user_id: currentUser?.id };
-        } else if (isProduct) {
-          const prodId = activeSharePost.product_id || activeSharePost.id;
-          shareEndpoint = `/api/products/${prodId}/share`;
-          shareBody = { destination, product_id: prodId, user_id: currentUser?.id };
-        } else if (isEvent) {
-          const evId = activeSharePost.event_id || activeSharePost.id;
-          shareEndpoint = `/api/events/${evId}/share`;
-          shareBody = { destination, event_id: evId, user_id: currentUser?.id };
-        }
-
-        await apiFetch(shareEndpoint, {
-          method: 'POST',
-          body: JSON.stringify(shareBody),
+        setPosts((prev) => {
+          const next = [newSharedItem, ...safeArray(prev)];
+          lastGoodPostsRef.current = next;
+          stableFeedRef.current = next;
+          return next;
         });
-      } catch (error) {
-        console.error('Failed to record share:', error);
+
+        setProfilePosts((prev) => [newSharedItem, ...safeArray(prev)]);
+      }
+
+      // If ShareBottomSheet did not already execute the network call, record it
+      if (!data?.data) {
+        try {
+          let shareEndpoint = `/api/posts/${activeSharePost.id}/share`;
+          let shareBody: any = { destination, user_id: currentUser?.id, message: data?.message };
+
+          const isGroupPost = !!(activeSharePost.group_id || activeSharePost.item_type === 'group_post');
+          const isSong = !!(activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.item_type === 'song' || activeSharePost.item_type === 'music');
+          const isProduct = !!(activeSharePost.product_id || activeSharePost.item_type === 'product');
+          const isEvent = !!(activeSharePost.event_id || activeSharePost.item_type === 'event');
+
+          if (isGroupPost) {
+            shareEndpoint = `/api/groups/posts/share`;
+            shareBody = { destination, post_id: activeSharePost.id, group_id: activeSharePost.group_id, user_id: currentUser?.id };
+          } else if (isSong) {
+            const songId = activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.id;
+            shareEndpoint = `/api/songs/${songId}/share`;
+            shareBody = { destination, song_id: songId, user_id: currentUser?.id };
+          } else if (isProduct) {
+            const prodId = activeSharePost.product_id || activeSharePost.id;
+            shareEndpoint = `/api/products/${prodId}/share`;
+            shareBody = { destination, product_id: prodId, user_id: currentUser?.id };
+          } else if (isEvent) {
+            const evId = activeSharePost.event_id || activeSharePost.id;
+            shareEndpoint = `/api/events/${evId}/share`;
+            shareBody = { destination, event_id: evId, user_id: currentUser?.id };
+          }
+
+          await apiFetch(shareEndpoint, {
+            method: 'POST',
+            body: JSON.stringify(shareBody),
+          });
+        } catch (error) {
+          console.error('Failed to record share:', error);
+        }
       }
     }
 
@@ -10585,7 +10638,7 @@ const handleShareComplete = useCallback(
     setShowShareSheet(false);
     scheduleSilentRefresh();
   },
-  [activeSharePost, scheduleSilentRefresh]
+  [activeSharePost, currentUser, scheduleSilentRefresh]
 );
 
 const deletePost = useCallback(

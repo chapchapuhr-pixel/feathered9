@@ -383,8 +383,60 @@ function apiDevPlugin(): Plugin {
         }
 
         if ((pathname.startsWith('/api/posts/') && pathname.endsWith('/share')) || pathname === '/api/posts/share') {
+          const parts = pathname.split('/');
+          const postId = Number(parts[3] || 0);
           res.statusCode = 200;
-          return res.end(JSON.stringify({ success: true, shares: 1, shares_count: 1 }));
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          return req.on('end', () => {
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const origPost = devPosts.find((p) => Number(p.id) === postId) || null;
+              const nextShares = (Number(origPost?.shares ?? origPost?.shares_count ?? 0) || 0) + 1;
+              if (origPost) {
+                origPost.shares = nextShares;
+                origPost.shares_count = nextShares;
+              }
+              const newSharedPost = {
+                id: Date.now(),
+                post_id: Date.now(),
+                user_id: parsed.user_id || 1,
+                content: parsed.message || parsed.content || '',
+                shared_post_id: postId,
+                shared_post: origPost,
+                created_at: new Date().toISOString(),
+                shares: 0,
+                shares_count: 0,
+                likes_count: 0,
+                reactions_count: 0,
+                comments_count: 0,
+              };
+              if (parsed.destination === 'feed' || parsed.destination === 'profile') {
+                devPosts.unshift(newSharedPost);
+              }
+              return res.end(JSON.stringify({
+                success: true,
+                shares: nextShares,
+                shares_count: nextShares,
+                post: newSharedPost,
+                shared_post: origPost,
+              }));
+            } catch {
+              return res.end(JSON.stringify({ success: true, shares: 1, shares_count: 1 }));
+            }
+          });
+        }
+
+        // Single Post Fetch: GET /api/posts/:id
+        if (req.method === 'GET' && /^\/api\/posts\/\d+$/.test(pathname)) {
+          const postId = Number(pathname.split('/')[3] || 0);
+          const found = devPosts.find((p) => Number(p.id) === postId);
+          if (found) {
+            res.statusCode = 200;
+            return res.end(JSON.stringify({ success: true, post: found }));
+          }
+          res.statusCode = 404;
+          return res.end(JSON.stringify({ success: false, error: 'Post not found' }));
         }
 
         if (pathname.startsWith('/api/posts/') && (pathname.endsWith('/comments') || pathname.endsWith('/comment'))) {

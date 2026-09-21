@@ -21,7 +21,7 @@ const toNum = (v: any, fallback = 0) => {
 };
 
 const ALLOWED_DESTINATIONS = new Set([
-  "feed","story","message","copy_link","group","external",
+  "feed","profile","story","message","copy_link","group","external",
 ]);
 
 export const onRequestOptions: PagesFunction = async () =>
@@ -39,7 +39,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
     const userId = headerUserId || bodyUserId || 0;
 
     const destination = String(body.destination || "feed").trim().toLowerCase();
-    const message = typeof body.message === "string" ? body.message.trim() : null;
+    const message = typeof body.message === "string" ? body.message.trim() : (typeof body.content === "string" ? body.content.trim() : null);
 
     if (!postId) return json({ success: false, error: "Invalid post id" }, 400);
     if (!userId)  return json({ success: false, error: "user_id is required" }, 400);
@@ -52,13 +52,19 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
 
     // Verify post exists
     const post = await env.DB
-      .prepare(`SELECT id, user_id FROM posts WHERE id = ? LIMIT 1`)
+      .prepare(`
+        SELECT p.*, u.name as author_name, u.avatar_url as author_avatar
+        FROM posts p
+        LEFT JOIN users u ON u.id = p.user_id
+        WHERE p.id = ?
+        LIMIT 1
+      `)
       .bind(postId)
       .first<any>();
 
     if (!post) return json({ success: false, error: "Post not found" }, 404);
 
-    // Record the share
+    // Record the share in post_shares table
     const ins = await env.DB
       .prepare(`
         INSERT INTO post_shares (post_id, user_id, destination, message)
@@ -66,6 +72,35 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       `)
       .bind(postId, userId, destination, message)
       .run();
+
+    // Create the shared post entry in the posts table so it appears in feeds and user profile
+    let createdSharedPost: any = null;
+    if (destination === "feed" || destination === "profile") {
+      try {
+        const insPost = await env.DB
+          .prepare(`
+            INSERT INTO posts (user_id, content, shared_post_id, created_at, updated_at)
+            VALUES (?, ?, ?, datetime('now'), datetime('now'))
+          `)
+          .bind(userId, message || '', postId)
+          .run();
+        
+        const newPostId = toNum(insPost.meta?.last_row_id, Date.now());
+        createdSharedPost = {
+          id: newPostId,
+          user_id: userId,
+          content: message || '',
+          shared_post_id: postId,
+          shared_post: post,
+          created_at: new Date().toISOString(),
+          reactions_count: 0,
+          comments_count: 0,
+          shares: 0,
+        };
+      } catch (errPost) {
+        console.error("Failed to insert into posts:", errPost);
+      }
+    }
 
     // Keep the denormalized counter in sync (best-effort)
     try {
@@ -97,12 +132,16 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       .bind(postId)
       .first<{ c: number }>();
 
+    const finalSharesCount = toNum(countRow?.c, toNum(post.shares, 0) + 1);
+
     return json({
       success: true,
       share_id: toNum(ins.meta?.last_row_id, 0),
       post_id: postId,
       destination,
-      shares_count: toNum(countRow?.c, 0),
+      shares_count: finalSharesCount,
+      post: createdSharedPost,
+      shared_post: post,
     });
   } catch (err: any) {
     return json(
