@@ -296,6 +296,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(u.role, 'user') AS role,
 
         p.content AS content,
+        p.content AS description,
         p.visibility AS visibility,
         p.views AS views,
         p.shares AS shares,
@@ -443,6 +444,145 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         )
         ${cursor ? `AND p.created_at < ?` : ""}
       ORDER BY p.created_at DESC
+      LIMIT ?
+    `;
+
+    const qShares = `
+      SELECT
+        'share' AS source,
+        'share' AS item_type,
+        ps.id AS id,
+        ('share:' || CAST(ps.id AS TEXT)) AS feed_key,
+        ps.created_at AS created_at,
+
+        p.id AS post_id,
+        p.id AS shared_post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        ps.user_id AS user_id,
+        COALESCE(NULLIF(TRIM(su.username), ''), 'user') AS username,
+        COALESCE(NULLIF(TRIM(su.name), ''), NULLIF(TRIM(su.username), ''), 'User') AS name,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(ps.message, '') AS content,
+        COALESCE(ps.message, '') AS description,
+        p.visibility AS visibility,
+        p.views AS views,
+        p.shares AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id AND COALESCE(pc.is_deleted, 0) = 0) AS comments_count,
+        (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) AS reactions_count,
+        (SELECT pr.type FROM post_reactions pr WHERE pr.post_id = p.id AND pr.user_id = ? LIMIT 1) AS my_reaction,
+
+        (
+          SELECT COALESCE(NULLIF(TRIM(u2.name), ''), NULLIF(TRIM(u2.username), ''), '')
+          FROM post_reactions pr2
+          JOIN users u2 ON u2.id = pr2.user_id
+          WHERE pr2.post_id = p.id
+          ORDER BY pr2.created_at DESC, pr2.id DESC
+          LIMIT 1
+        ) AS reactor_name,
+
+        (
+          SELECT json_group_array(
+            json_object(
+              'user_id', x.user_id,
+              'type', x.type,
+              'name', x.name,
+              'profile_image_url', x.profile_image_url
+            )
+          )
+          FROM (
+            SELECT
+              pr3.user_id AS user_id,
+              LOWER(COALESCE(pr3.type,'like')) AS type,
+              COALESCE(NULLIF(TRIM(u3.name), ''), NULLIF(TRIM(u3.username), ''), '') AS name,
+              CASE
+                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u3.profile_image_url) > 300 THEN NULL
+                ELSE u3.profile_image_url
+              END AS profile_image_url
+            FROM post_reactions pr3
+            LEFT JOIN users u3 ON u3.id = pr3.user_id
+            WHERE pr3.post_id = p.id
+            ORDER BY pr3.created_at DESC, pr3.id DESC
+            LIMIT 30
+          ) x
+        ) AS reactions_preview,
+
+        (
+          SELECT json_group_array(json_object('type', t.type, 'count', t.c))
+          FROM (
+            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
+            FROM post_reactions
+            WHERE post_id = p.id
+            GROUP BY LOWER(COALESCE(type,'like'))
+            ORDER BY c DESC
+          ) t
+        ) AS reactions_by_type,
+
+        NULL AS video_url,
+        NULL AS caption,
+        NULL AS song_name,
+        NULL AS audio_url,
+        0 AS audio_start,
+        0 AS audio_end,
+        NULL AS location,
+        NULL AS sound_key,
+        NULL AS sound_id,
+
+        NULL AS song_title,
+        NULL AS song_artist_name,
+        NULL AS song_album_name,
+        NULL AS song_cover_image_url,
+        NULL AS song_duration_seconds,
+        NULL AS song_genre,
+        NULL AS song_likes_count,
+        NULL AS song_plays_count,
+
+        'share' AS type,
+        'share' AS post_type,
+        'share' AS kind,
+        json_object(
+          'kind', 'share',
+          'type', 'share',
+          'share_id', ps.id,
+          'original_post_id', p.id,
+          'destination', ps.destination,
+          'message', ps.message,
+          'description', ps.message
+        ) AS meta,
+
+        NULL AS group_id,
+        NULL AS group_name,
+        NULL AS group_image
+
+      FROM post_shares ps
+      JOIN posts p ON p.id = ps.post_id
+      LEFT JOIN users su ON su.id = ps.user_id
+      WHERE ps.user_id = ?
+        AND COALESCE(p.is_deleted, 0) = 0
+        AND (p.visibility IS NULL OR p.visibility = 'public' OR p.visibility = '' OR p.visibility = 'Public')
+        ${cursor ? `AND ps.created_at < ?` : ""}
+      ORDER BY ps.created_at DESC
       LIMIT ?
     `;
 
@@ -639,14 +779,26 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     const bindCursor = (base: any[]) => (cursor ? [...base, cursor, perType] : [...base, perType]);
 
-    const [postsRes, songsRes, productsRes] = await Promise.all([
+    const runShares = async () => {
+      try {
+        const res = await env.DB.prepare(qShares).bind(...bindCursor([viewerId || 0, userId])).all();
+        return Array.isArray(res?.results) ? res.results : [];
+      } catch (err) {
+        console.warn("by-user qShares query fallback:", err);
+        return [];
+      }
+    };
+
+    const [postsRes, sharesResults, songsRes, productsRes] = await Promise.all([
       env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
+      runShares(),
       env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
       env.DB.prepare(qProducts).bind(...bindCursor([userId])).all(),
     ]);
 
     const items = [
       ...(Array.isArray(postsRes.results) ? postsRes.results : []),
+      ...sharesResults,
       ...(Array.isArray(songsRes.results) ? songsRes.results : []),
       ...(Array.isArray(productsRes.results) ? productsRes.results : []),
     ];
@@ -664,12 +816,37 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const hasMore = mergedPlusOne.length > limit;
     const merged = mergedPlusOne.slice(0, limit);
 
-    const normalized = merged.map((item: any) => ({
-      ...item,
-      ...normalizeMedia(item),
-      comments_count: Number(item?.comments_count ?? 0),
-      reactions_count: Number(item?.reactions_count ?? 0),
-    }));
+    const normalized = merged.map((item: any) => {
+      const isVerified = Boolean(
+        item?.is_verified &&
+        item?.is_verified !== 0 &&
+        item?.is_verified !== "0" &&
+        item?.is_verified !== false
+      );
+
+      const authorObj = {
+        id: item?.user_id || item?.author?.id,
+        name: item?.name || item?.author?.name || item?.username || "User",
+        username: item?.username || item?.author?.username || "",
+        avatar_url: item?.avatar_url || item?.profile_image_url || item?.author?.profile_image_url || "",
+        profile_image_url: item?.profile_image_url || item?.avatar_url || item?.author?.profile_image_url || "",
+        is_verified: isVerified,
+        verified: isVerified,
+        role: item?.role || item?.author?.role || "user",
+      };
+
+      return {
+        ...item,
+        ...normalizeMedia(item),
+        description: item?.description ?? item?.content ?? "",
+        is_verified: isVerified,
+        verified: isVerified,
+        author: authorObj,
+        user: authorObj,
+        comments_count: Number(item?.comments_count ?? 0),
+        reactions_count: Number(item?.reactions_count ?? 0),
+      };
+    });
 
     // Populate original post for shared posts
     const sharedPostIds = Array.from(
@@ -690,7 +867,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             u.name as author_name,
             u.username as author_user_name,
             u.profile_image_url as author_avatar,
-            u.is_verified as author_verified
+            u.is_verified as author_verified,
+            u.role as author_role
           FROM posts p
           LEFT JOIN users u ON p.user_id = u.id
           WHERE p.id IN (${placeholders})
@@ -706,37 +884,48 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             const finalMediaUrls = parsedUrls.length > 0
               ? parsedUrls
               : (row.media_url ? [row.media_url] : []);
+
+            const isOrigVerified = Boolean(
+              row.author_verified &&
+              row.author_verified !== 0 &&
+              row.author_verified !== "0" &&
+              row.author_verified !== false
+            );
+
+            const origAuthor = {
+              id: row.author_id,
+              name: row.author_name || 'User',
+              username: row.author_user_name || '',
+              user_name: row.author_user_name || '',
+              avatar_url: row.author_avatar || '',
+              avatar: row.author_avatar || '',
+              profile_image_url: row.author_avatar || '',
+              verified: isOrigVerified,
+              is_verified: isOrigVerified,
+              role: row.author_role || 'user',
+            };
+
             origMap.set(Number(row.id), {
               ...row,
+              description: row.description || row.content || '',
               media_urls: finalMediaUrls,
               images: finalMediaUrls,
-              author: {
-                id: row.author_id,
-                name: row.author_name || 'User',
-                username: row.author_user_name || '',
-                user_name: row.author_user_name || '',
-                avatar_url: row.author_avatar || '',
-                avatar: row.author_avatar || '',
-                profile_image_url: row.author_avatar || '',
-                verified: Boolean(row.author_verified),
-                is_verified: Boolean(row.author_verified),
-              },
-              user: {
-                id: row.author_id,
-                name: row.author_name || 'User',
-                username: row.author_user_name || '',
-                profile_image_url: row.author_avatar || '',
-                avatar_url: row.author_avatar || '',
-                avatar: row.author_avatar || '',
-                is_verified: Boolean(row.author_verified),
-              },
+              is_verified: isOrigVerified,
+              verified: isOrigVerified,
+              author: origAuthor,
+              user: origAuthor,
             });
           });
         }
 
         normalized.forEach((it: any) => {
           if (it?.shared_post_id && origMap.has(Number(it.shared_post_id))) {
-            it.shared_post = origMap.get(Number(it.shared_post_id));
+            const sp = origMap.get(Number(it.shared_post_id));
+            it.shared_post = {
+              ...sp,
+              ...normalizeMedia(sp),
+              description: sp.description || sp.content || '',
+            };
           }
         });
       } catch (err) {

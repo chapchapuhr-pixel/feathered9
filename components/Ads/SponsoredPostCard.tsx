@@ -126,7 +126,7 @@ export const SponsoredPostCard: React.FC<SponsoredPostCardProps> = ({
               onClick={() => onProfileClick?.(ad.user_id || ad.advertiser_id)}
             >
               {advertiserName}
-              {ad.is_verified && (
+              {Boolean(ad.is_verified) && (
                 <VerifiedBadge size={14} className="ml-1.5 shrink-0" />
               )}
             </div>

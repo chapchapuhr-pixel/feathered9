@@ -590,7 +590,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
                 </div>
                 <div className="text-[15px] text-gray-500 dark:text-gray-400 truncate flex items-center gap-1.5">
                   <span>{authorName}</span>
-                  {ownerAuthor.is_verified && (
+                  {Boolean(ownerAuthor?.is_verified) && (
                     <VerifiedBadge size={14} className="shrink-0" />
                   )}
                 </div>

@@ -2711,7 +2711,7 @@ export const PeopleYouMayKnowGrid = memo(
                         title={user.name}
                       >
                         <span className="truncate">{user.name}</span>
-                        {user.is_verified && (
+                        {Boolean(user.is_verified) && (
                           <VerifiedBadge size={14} className="shrink-0" />
                         )}
                       </button>
@@ -6820,7 +6820,7 @@ export const Post = memo(
                       <h4 className="font-bold text-[#F8FAFC] text-[21px] cursor-pointer hover:underline truncate">
                         {a.name || a.username || 'User'}
                       </h4>
-                      {a.is_verified && (
+                      {Boolean(a.is_verified) && (
                         <VerifiedBadge size={21} className="shrink-0" />
                       )}
                       {(groupName || group) && (
@@ -6835,7 +6835,7 @@ export const Post = memo(
                             className="font-bold text-[#F8FAFC] hover:underline cursor-pointer flex items-center gap-1 text-[21px]"
                           >
                             <span className="truncate">{groupName || group?.name}</span>
-                            {(group?.is_verified || (group as any)?.verified) && (
+                            {Boolean(group?.is_verified || (group as any)?.verified) && (
                               <VerifiedBadge size={21} className="shrink-0" />
                             )}
                           </button>
@@ -7046,7 +7046,7 @@ export const Post = memo(
                             <h5 className="font-bold text-[#F8FAFC] text-[20px] hover:underline cursor-pointer truncate">
                               {ownerAuthor.name || 'User'}
                             </h5>
-                            {ownerAuthor.is_verified && (
+                            {Boolean(ownerAuthor.is_verified) && (
                               <VerifiedBadge size={20} className="shrink-0" />
                             )}
                           </div>

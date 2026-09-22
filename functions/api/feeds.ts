@@ -373,6 +373,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(u.role, 'user') AS role,
 
         p.content AS content,
+        p.content AS description,
         p.visibility AS visibility,
         p.views AS views,
         p.shares AS shares,
@@ -550,8 +551,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(su.is_verified, 0) AS is_verified,
         COALESCE(su.role, 'user') AS role,
 
-        -- Original post content (backward compat at top level)
-        p.content AS content,
+        -- Sharer's message / description (content of the share wrapper)
+        COALESCE(ps.message, '') AS content,
+        COALESCE(ps.message, '') AS description,
+        COALESCE(ps.message, '') AS message,
+        COALESCE(ps.message, '') AS caption,
         p.visibility AS visibility,
         p.views AS views,
         p.shares AS shares,
@@ -662,17 +666,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'original_post_id', p.id,
           'destination', ps.destination,
           'message', ps.message,
+          'description', ps.message,
           'sharer', json_object(
             'id', ps.user_id,
             'name', COALESCE(su.name, su.username, ''),
             'username', su.username,
-            'profile_image_url', su.profile_image_url
+            'profile_image_url', su.profile_image_url,
+            'is_verified', CASE WHEN COALESCE(su.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(su.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
           ),
           'original_author', json_object(
             'id', p.user_id,
             'name', COALESCE(u.name, u.username, ''),
             'username', u.username,
-            'profile_image_url', u.profile_image_url
+            'profile_image_url', u.profile_image_url,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
           )
         ) AS meta,
 
@@ -681,6 +690,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'id', p.id,
           'user_id', p.user_id,
           'content', p.content,
+          'description', p.content,
           'visibility', p.visibility,
           'views', COALESCE(p.views, 0),
           'shares', COALESCE(p.shares, 0),
@@ -733,7 +743,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
                 WHEN length(u.profile_image_url) > 300 THEN NULL
                 ELSE u.profile_image_url
               END,
-            'is_verified', COALESCE(u.is_verified, 0),
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
             'role', COALESCE(u.role, 'user')
           ),
 
@@ -753,7 +764,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
                 WHEN length(u.profile_image_url) > 300 THEN NULL
                 ELSE u.profile_image_url
               END,
-            'is_verified', COALESCE(u.is_verified, 0)
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
           ),
 
           'comments_count',
@@ -1482,14 +1494,19 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       ? freshPostsRes.results
       : [];
 
-    const freshSharesRes = await env.DB.prepare(
-      `${baseSelectShares} ${whereSharesSql} ORDER BY ps.created_at DESC LIMIT ?`
-    )
-      .bind(reactionUserId, reactionUserId, ...bindsShares, freshCount)
-      .all();
-    const freshShares = Array.isArray(freshSharesRes?.results)
-      ? freshSharesRes.results
-      : [];
+    let freshShares: any[] = [];
+    try {
+      const freshSharesRes = await env.DB.prepare(
+        `${baseSelectShares} ${whereSharesSql} ORDER BY ps.created_at DESC LIMIT ?`
+      )
+        .bind(reactionUserId, reactionUserId, ...bindsShares, freshCount)
+        .all();
+      freshShares = Array.isArray(freshSharesRes?.results)
+        ? freshSharesRes.results
+        : [];
+    } catch (errShares) {
+      console.warn("freshShares query fallback:", errShares);
+    }
 
     const freshSongsRes = await env.DB.prepare(
       `${baseSelectSongs} ${whereSongsSql} ORDER BY s.created_at DESC LIMIT ?`
@@ -1561,14 +1578,18 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         .all();
       explorePosts = Array.isArray(explorePostsRes?.results) ? explorePostsRes.results : [];
 
-      const exploreSharesRes = await env.DB.prepare(
-        `${baseSelectShares} ${whereSharesSql} ORDER BY RANDOM() LIMIT ?`
-      )
-        .bind(reactionUserId, reactionUserId, ...bindsShares, exploreCount)
-        .all();
-      exploreShares = Array.isArray(exploreSharesRes?.results)
-        ? exploreSharesRes.results
-        : [];
+      try {
+        const exploreSharesRes = await env.DB.prepare(
+          `${baseSelectShares} ${whereSharesSql} ORDER BY RANDOM() LIMIT ?`
+        )
+          .bind(reactionUserId, reactionUserId, ...bindsShares, exploreCount)
+          .all();
+        exploreShares = Array.isArray(exploreSharesRes?.results)
+          ? exploreSharesRes.results
+          : [];
+      } catch (errExploreShares) {
+        console.warn("exploreShares query fallback:", errExploreShares);
+      }
 
       const exploreSongsRes = await env.DB.prepare(
         `${baseSelectSongs} ${whereSongsSql} ORDER BY RANDOM() LIMIT ?`
@@ -1691,14 +1712,37 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     }
 
     const ordered = orderedRaw.slice(0, limit).map((item: any) => {
-      const normalized = {
+      const isVerified = Boolean(
+        item?.is_verified &&
+        item?.is_verified !== 0 &&
+        item?.is_verified !== "0" &&
+        item?.is_verified !== false
+      );
+
+      const authorObj = {
+        id: item?.user_id || item?.author?.id,
+        name: item?.name || item?.author?.name || item?.username || "User",
+        username: item?.username || item?.author?.username || "",
+        avatar_url: item?.avatar_url || item?.profile_image_url || item?.author?.profile_image_url || "",
+        profile_image_url: item?.profile_image_url || item?.avatar_url || item?.author?.profile_image_url || "",
+        is_verified: isVerified,
+        verified: isVerified,
+        role: item?.role || item?.author?.role || "user",
+      };
+
+      const normalized: any = {
         ...item,
         ...normalizeMedia(item),
+        description: item?.description ?? item?.content ?? "",
+        is_verified: isVerified,
+        verified: isVerified,
+        author: authorObj,
+        user: authorObj,
         comments_count: Number((item as any)?.comments_count ?? 0),
         reactions_count: Number((item as any)?.reactions_count ?? 0),
       };
 
-      // Normalize nested shared_post media
+      // Normalize nested shared_post media and verification
       if ((item as any)?.shared_post) {
         let sp: any = (item as any).shared_post;
         if (typeof sp === "string") {
@@ -1709,9 +1753,33 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           }
         }
         if (sp && typeof sp === "object") {
+          const spVerified = Boolean(
+            (sp.is_verified || sp.verified || sp.author?.is_verified || sp.author?.verified || sp.user?.is_verified) &&
+            sp.is_verified !== 0 &&
+            sp.is_verified !== "0" &&
+            sp.verified !== 0 &&
+            sp.verified !== "0"
+          );
+
+          const spAuthor = {
+            id: sp.user_id || sp.author?.id,
+            name: sp.author?.name || sp.author_name || sp.user?.name || sp.name || "User",
+            username: sp.author?.username || sp.author_username || sp.user?.username || sp.username || "",
+            avatar_url: sp.author?.avatar_url || sp.author?.profile_image_url || sp.author_avatar || sp.author_image || "",
+            profile_image_url: sp.author?.profile_image_url || sp.author?.avatar_url || sp.author_avatar || sp.author_image || "",
+            is_verified: spVerified,
+            verified: spVerified,
+            role: sp.author?.role || sp.user?.role || "user",
+          };
+
           normalized.shared_post = {
             ...sp,
             ...normalizeMedia(sp),
+            description: sp.description ?? sp.content ?? "",
+            is_verified: spVerified,
+            verified: spVerified,
+            author: spAuthor,
+            user: spAuthor,
           };
         }
       }
