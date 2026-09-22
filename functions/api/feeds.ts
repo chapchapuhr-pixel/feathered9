@@ -44,9 +44,6 @@ const parseSeenKeys = (raw: string | null, max = 250) => {
   return Array.from(new Set(keys)).slice(0, max);
 };
 
-// --------------------
-// Multi-media helpers
-// --------------------
 const cleanUrl = (v: any) => {
   const s = String(v ?? "").trim();
   if (!s) return "";
@@ -270,6 +267,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     const userId =
       toInt(url.searchParams.get("userId"), 0) ||
+      toInt(url.searchParams.get("user_id"), 0) ||
       toInt(request.headers.get("x-user-id"), 0);
     const reactionUserId = userId || 0;
 
@@ -349,6 +347,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         p.updated_at AS updated_at,
 
         p.id AS post_id,
+        NULL AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -365,6 +364,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -469,6 +473,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         NULL AS type, NULL AS post_type, NULL AS kind, NULL AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM posts p
       LEFT JOIN users u ON u.id = p.user_id
@@ -495,11 +501,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       bindsShares.push(...seen);
     }
     if (seenKeys.length > 0) {
-      whereShares.push(`('share:' || CAST(ps.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`);
+      whereShares.push(
+        `('share:' || CAST(ps.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`
+      );
       bindsShares.push(...seenKeys);
     }
 
-    const whereSharesSql = whereShares.length ? `WHERE ${whereShares.join(" AND ")}` : "";
+    const whereSharesSql = whereShares.length
+      ? `WHERE ${whereShares.join(" AND ")}`
+      : "";
 
     const baseSelectShares = `
       SELECT
@@ -513,6 +523,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         p.updated_at AS updated_at,
 
         p.id AS post_id,
+        p.id AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -522,6 +533,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ps.user_id AS user_id,
         ps.user_id AS owner_id,
         'user_id' AS owner_field,
+
+        -- Sharer's info (top-level author of the card)
         COALESCE(su.username, 'user') AS username,
         COALESCE(su.name, su.username, 'User') AS name,
         CASE
@@ -529,9 +542,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(su.profile_image_url) > 300 THEN NULL
           ELSE su.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
         COALESCE(su.is_verified, 0) AS is_verified,
         COALESCE(su.role, 'user') AS role,
 
+        -- Original post content (backward compat at top level)
         p.content AS content,
         p.visibility AS visibility,
         p.views AS views,
@@ -635,6 +654,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         'share' AS post_type,
         'share' AS kind,
 
+        -- meta JSON (backward compat)
         json_object(
           'kind', 'share',
           'type', 'share',
@@ -655,6 +675,94 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             'profile_image_url', u.profile_image_url
           )
         ) AS meta,
+
+        -- ✅ Fully populated shared_post
+        json_object(
+          'id', p.id,
+          'user_id', p.user_id,
+          'content', p.content,
+          'visibility', p.visibility,
+          'views', COALESCE(p.views, 0),
+          'shares', COALESCE(p.shares, 0),
+          'created_at', p.created_at,
+          'updated_at', p.updated_at,
+          'is_deleted', COALESCE(p.is_deleted, 0),
+
+          'media_url',
+            CASE
+              WHEN p.media_url LIKE 'data:%' THEN NULL
+              WHEN length(p.media_url) > 300 THEN NULL
+              ELSE p.media_url
+            END,
+          'media_type',
+            CASE
+              WHEN p.media_url LIKE 'data:%' THEN NULL
+              WHEN length(p.media_url) > 300 THEN NULL
+              ELSE p.media_type
+            END,
+          'media_urls',
+            CASE
+              WHEN p.media_urls LIKE 'data:%' THEN NULL
+              WHEN length(p.media_urls) > 5000 THEN NULL
+              ELSE p.media_urls
+            END,
+          'media_types',
+            CASE
+              WHEN length(p.media_types) > 5000 THEN NULL
+              ELSE p.media_types
+            END,
+          'media_meta',
+            CASE
+              WHEN length(p.media_meta) > 100000 THEN NULL
+              ELSE p.media_meta
+            END,
+
+          'author', json_object(
+            'id', p.user_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', COALESCE(u.is_verified, 0),
+            'role', COALESCE(u.role, 'user')
+          ),
+
+          'user', json_object(
+            'id', p.user_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', COALESCE(u.is_verified, 0)
+          ),
+
+          'comments_count',
+            (SELECT COUNT(*) FROM post_comments pc2 WHERE pc2.post_id = p.id AND COALESCE(pc2.is_deleted,0) = 0),
+          'reactions_count',
+            (SELECT COUNT(*) FROM post_reactions pr2 WHERE pr2.post_id = p.id),
+          'my_reaction',
+            (SELECT pr3.type FROM post_reactions pr3 WHERE pr3.post_id = p.id AND pr3.user_id = ? LIMIT 1)
+        ) AS shared_post,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM post_shares ps
@@ -693,7 +801,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         s.created_at AS created_at,
         NULL AS updated_at,
 
-        NULL AS post_id, NULL AS reel_id,
+        NULL AS post_id, NULL AS shared_post_id, NULL AS reel_id,
         s.id AS song_id2,
         NULL AS event_id, NULL AS group_post_id, NULL AS product_id2,
 
@@ -707,6 +815,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -729,54 +842,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id) AS reactions_count,
         (SELECT sr.type FROM song_reactions sr WHERE sr.song_id = s.id AND sr.user_id = ? LIMIT 1) AS my_reaction,
 
-        (
-          SELECT COALESCE(u2.name, u2.username, '')
-          FROM song_reactions sr2
-          JOIN users u2 ON u2.id = sr2.user_id
-          WHERE sr2.song_id = s.id
-          ORDER BY sr2.created_at DESC, sr2.id DESC
-          LIMIT 1
-        ) AS reactor_name,
-
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              sr3.user_id AS user_id,
-              LOWER(COALESCE(sr3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM song_reactions sr3
-            LEFT JOIN users u3 ON u3.id = sr3.user_id
-            WHERE sr3.song_id = s.id
-            ORDER BY sr3.created_at DESC, sr3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM song_reactions
-            WHERE song_id = s.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption,
         NULL AS song_name,
@@ -821,6 +889,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           )
         ) AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM songs s
       LEFT JOIN users u ON u.id = s.uploader_id
@@ -835,7 +905,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     whereEvents.push(
       `(e.visibility IS NULL OR e.visibility = 'worldwide' OR e.visibility = 'targeted')`
     );
-
     whereEvents.push(`COALESCE(e.is_deleted, 0) = 0`);
 
     if (cursor && cursor.trim()) {
@@ -860,7 +929,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         e.created_at AS created_at,
         e.updated_at AS updated_at,
 
-        NULL AS post_id, NULL AS reel_id, NULL AS song_id2,
+        NULL AS post_id, NULL AS shared_post_id, NULL AS reel_id, NULL AS song_id2,
         e.id AS event_id,
         NULL AS group_post_id, NULL AS product_id2,
 
@@ -874,6 +943,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -912,54 +986,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         (SELECT COUNT(*) FROM event_reactions er WHERE er.event_id = e.id) AS reactions_count,
         (SELECT er.type FROM event_reactions er WHERE er.event_id = e.id AND er.user_id = ? LIMIT 1) AS my_reaction,
 
-        (
-          SELECT COALESCE(u2.name, u2.username, '')
-          FROM event_reactions er2
-          JOIN users u2 ON u2.id = er2.user_id
-          WHERE er2.event_id = e.id
-          ORDER BY er2.created_at DESC, er2.id DESC
-          LIMIT 1
-        ) AS reactor_name,
-
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              er3.user_id AS user_id,
-              LOWER(COALESCE(er3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM event_reactions er3
-            LEFT JOIN users u3 ON u3.id = er3.user_id
-            WHERE er3.event_id = e.id
-            ORDER BY er3.created_at DESC, er3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM event_reactions
-            WHERE event_id = e.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption, NULL AS song_name, NULL AS audio_url,
         0 AS audio_start, 0 AS audio_end,
@@ -1001,6 +1030,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             'cover_url', e.cover_url
           )
         ) AS meta,
+
+        NULL AS shared_post,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM events e
@@ -1053,7 +1084,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         gp.created_at AS created_at,
         NULL AS updated_at,
 
-        NULL AS post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
+        NULL AS post_id, NULL AS shared_post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
         gp.id AS group_post_id,
         NULL AS product_id2,
 
@@ -1067,6 +1098,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -1111,54 +1147,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         (SELECT COUNT(*) FROM group_post_reactions gpr WHERE gpr.group_post_id = gp.id) AS reactions_count,
         (SELECT gpr.type FROM group_post_reactions gpr WHERE gpr.group_post_id = gp.id AND gpr.user_id = ? LIMIT 1) AS my_reaction,
 
-        (
-          SELECT COALESCE(u2.name, u2.username, '')
-          FROM group_post_reactions gpr2
-          JOIN users u2 ON u2.id = gpr2.user_id
-          WHERE gpr2.group_post_id = gp.id
-          ORDER BY gpr2.created_at DESC, gpr2.id DESC
-          LIMIT 1
-        ) AS reactor_name,
-
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              gpr3.user_id AS user_id,
-              LOWER(COALESCE(gpr3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM group_post_reactions gpr3
-            LEFT JOIN users u3 ON u3.id = gpr3.user_id
-            WHERE gpr3.group_post_id = gp.id
-            ORDER BY gpr3.created_at DESC, gpr3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM group_post_reactions
-            WHERE group_post_id = gp.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption, NULL AS song_name, NULL AS audio_url,
         0 AS audio_start, 0 AS audio_end,
@@ -1172,7 +1163,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS attending_count, NULL AS interested_count,
         NULL AS my_rsvp_status,
 
-        NULL AS type, NULL AS post_type, NULL AS kind, NULL AS meta
+        NULL AS type, NULL AS post_type, NULL AS kind, NULL AS meta,
+
+        NULL AS shared_post
       FROM group_posts gp
       LEFT JOIN users u ON u.id = gp.user_id
       LEFT JOIN groups g ON g.id = gp.group_id
@@ -1210,7 +1203,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         pr.created_at AS created_at,
         NULL AS updated_at,
 
-        NULL AS post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
+        NULL AS post_id, NULL AS shared_post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
         NULL AS group_post_id,
         pr.id AS product_id2,
 
@@ -1224,6 +1217,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -1232,7 +1230,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         0 AS views, 0 AS shares,
 
         NULL AS media_url, NULL AS media_type,
-
         pr.images AS media_urls,
         NULL AS media_types,
         pr.image_variants AS media_meta,
@@ -1242,54 +1239,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         (SELECT COUNT(*) FROM product_reactions prr WHERE prr.product_id = pr.id) AS reactions_count,
         (SELECT prr.type FROM product_reactions prr WHERE prr.product_id = pr.id AND prr.user_id = ? LIMIT 1) AS my_reaction,
 
-        (
-          SELECT COALESCE(u2.name, u2.username, '')
-          FROM product_reactions pr2
-          JOIN users u2 ON u2.id = pr2.user_id
-          WHERE pr2.product_id = pr.id
-          ORDER BY pr2.created_at DESC, pr2.id DESC
-          LIMIT 1
-        ) AS reactor_name,
-
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              pr3.user_id AS user_id,
-              LOWER(COALESCE(pr3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM product_reactions pr3
-            LEFT JOIN users u3 ON u3.id = pr3.user_id
-            WHERE pr3.product_id = pr.id
-            ORDER BY pr3.created_at DESC, pr3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM product_reactions
-            WHERE product_id = pr.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption, NULL AS song_name, NULL AS audio_url,
         0 AS audio_start, 0 AS audio_end,
@@ -1331,6 +1283,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             'image_variants', pr.image_variants
           )
         ) AS meta,
+
+        NULL AS shared_post,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM products pr
@@ -1416,7 +1370,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(a.created_at, p.created_at) AS created_at,
         p.updated_at AS updated_at,
 
-        p.id AS post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
+        p.id AS post_id, NULL AS shared_post_id, NULL AS reel_id, NULL AS song_id2, NULL AS event_id,
         NULL AS group_post_id, NULL AS product_id2,
 
         p.user_id AS user_id,
@@ -1429,6 +1383,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
 
@@ -1443,11 +1402,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           ELSE COALESCE(a.media_url, p.media_url)
         END AS media_url,
 
-        COALESCE(
-          NULLIF(a.media_type, ''),
-          NULLIF(p.media_type, ''),
-          'image'
-        ) AS media_type,
+        COALESCE(NULLIF(a.media_type, ''), NULLIF(p.media_type, ''), 'image') AS media_type,
 
         CASE
           WHEN COALESCE(a.media_urls, p.media_urls) LIKE 'data:%' THEN NULL
@@ -1470,54 +1425,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) AS reactions_count,
         (SELECT pr.type FROM post_reactions pr WHERE pr.post_id = p.id AND pr.user_id = ? LIMIT 1) AS my_reaction,
 
-        (
-          SELECT COALESCE(u2.name, u2.username, '')
-          FROM post_reactions pr2
-          JOIN users u2 ON u2.id = pr2.user_id
-          WHERE pr2.post_id = p.id
-          ORDER BY pr2.created_at DESC, pr2.id DESC
-          LIMIT 1
-        ) AS reactor_name,
-
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              pr3.user_id AS user_id,
-              LOWER(COALESCE(pr3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM post_reactions pr3
-            LEFT JOIN users u3 ON u3.id = pr3.user_id
-            WHERE pr3.post_id = p.id
-            ORDER BY pr3.created_at DESC, pr3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM post_reactions
-            WHERE post_id = p.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption, NULL AS song_name, NULL AS audio_url,
         0 AS audio_start, 0 AS audio_end,
@@ -1552,6 +1462,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           )
         ) AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM ads a
       JOIN posts p ON p.id = a.post_id
@@ -1573,7 +1485,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const freshSharesRes = await env.DB.prepare(
       `${baseSelectShares} ${whereSharesSql} ORDER BY ps.created_at DESC LIMIT ?`
     )
-      .bind(reactionUserId, ...bindsShares, freshCount)
+      .bind(reactionUserId, reactionUserId, ...bindsShares, freshCount)
       .all();
     const freshShares = Array.isArray(freshSharesRes?.results)
       ? freshSharesRes.results
@@ -1652,7 +1564,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       const exploreSharesRes = await env.DB.prepare(
         `${baseSelectShares} ${whereSharesSql} ORDER BY RANDOM() LIMIT ?`
       )
-        .bind(reactionUserId, ...bindsShares, exploreCount)
+        .bind(reactionUserId, reactionUserId, ...bindsShares, exploreCount)
         .all();
       exploreShares = Array.isArray(exploreSharesRes?.results)
         ? exploreSharesRes.results
@@ -1778,12 +1690,34 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     }
 
-    const ordered = orderedRaw.slice(0, limit).map((item: any) => ({
-      ...item,
-      ...normalizeMedia(item),
-      comments_count: Number((item as any)?.comments_count ?? 0),
-      reactions_count: Number((item as any)?.reactions_count ?? 0),
-    }));
+    const ordered = orderedRaw.slice(0, limit).map((item: any) => {
+      const normalized = {
+        ...item,
+        ...normalizeMedia(item),
+        comments_count: Number((item as any)?.comments_count ?? 0),
+        reactions_count: Number((item as any)?.reactions_count ?? 0),
+      };
+
+      // Normalize nested shared_post media
+      if ((item as any)?.shared_post) {
+        let sp: any = (item as any).shared_post;
+        if (typeof sp === "string") {
+          try {
+            sp = JSON.parse(sp);
+          } catch {
+            sp = null;
+          }
+        }
+        if (sp && typeof sp === "object") {
+          normalized.shared_post = {
+            ...sp,
+            ...normalizeMedia(sp),
+          };
+        }
+      }
+
+      return normalized;
+    });
 
     // ============================================================
     // Merge + dedup PRODUCTS
