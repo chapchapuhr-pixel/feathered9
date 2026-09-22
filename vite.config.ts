@@ -3,6 +3,7 @@ import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const devPosts: any[] = [];
+const devShares: any[] = [];
 
 function apiDevPlugin(): Plugin {
   return {
@@ -257,7 +258,20 @@ function apiDevPlugin(): Plugin {
 
         if (pathname === '/api/feeds') {
           res.statusCode = 200;
-          return res.end(JSON.stringify({ feed: devPosts }));
+          return res.end(JSON.stringify({ feed: devPosts, success: true }));
+        }
+
+        if (pathname === '/api/posts/by-user') {
+          const parsedUrl = new URL(req.url || '', 'http://localhost');
+          const uid = Number(parsedUrl.searchParams.get('userId') || parsedUrl.searchParams.get('user_id') || 0);
+          const userPosts = devPosts.filter((p) => !uid || Number(p.user_id) === uid);
+          res.statusCode = 200;
+          return res.end(JSON.stringify({ success: true, posts: userPosts, data: userPosts, results: userPosts }));
+        }
+
+        if (pathname === '/api/shares' || pathname === '/api/post_shares') {
+          res.statusCode = 200;
+          return res.end(JSON.stringify({ success: true, shares: devShares, data: devShares }));
         }
 
         if (pathname === '/api/products') {
@@ -414,11 +428,24 @@ function apiDevPlugin(): Plugin {
                 reactions_count: 0,
                 comments_count: 0,
               };
+              const shareRecord = {
+                id: Date.now(),
+                post_id: postId,
+                user_id: parsed.user_id || 1,
+                destination: parsed.destination || 'feed',
+                message: parsed.message || parsed.content || '',
+                created_at: new Date().toISOString(),
+              };
+              devShares.unshift(shareRecord);
+
               if (parsed.destination === 'feed' || parsed.destination === 'profile') {
                 devPosts.unshift(newSharedPost);
               }
               return res.end(JSON.stringify({
                 success: true,
+                share_id: shareRecord.id,
+                post_id: postId,
+                destination: parsed.destination || 'feed',
                 shares: nextShares,
                 shares_count: nextShares,
                 post: newSharedPost,

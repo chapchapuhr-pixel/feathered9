@@ -248,8 +248,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     const url = new URL(request.url);
 
-    const userId = toInt(url.searchParams.get("userId"), 0);
-    const viewerId = toInt(url.searchParams.get("viewerId"), 0);
+    const userId = toInt(
+      url.searchParams.get("userId") || url.searchParams.get("user_id"),
+      0
+    );
+    const viewerId = toInt(
+      url.searchParams.get("viewerId") || url.searchParams.get("viewer_id"),
+      0
+    );
     const limit = clamp(toInt(url.searchParams.get("limit"), 20), 1, 50);
     const cursorRaw = url.searchParams.get("cursor");
     const cursor = cursorRaw && cursorRaw.trim() ? cursorRaw.trim() : null;
@@ -693,18 +699,36 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         const origMap = new Map<number, any>();
         if (Array.isArray(origPostsRes.results)) {
           origPostsRes.results.forEach((row: any) => {
+            const rawUrls = row.media_urls
+              ? (typeof row.media_urls === 'string' ? JSON.parse(row.media_urls) : row.media_urls)
+              : [];
+            const parsedUrls = Array.isArray(rawUrls) ? rawUrls : [];
+            const finalMediaUrls = parsedUrls.length > 0
+              ? parsedUrls
+              : (row.media_url ? [row.media_url] : []);
             origMap.set(Number(row.id), {
               ...row,
-              media_urls: row.media_urls
-                ? (typeof row.media_urls === 'string' ? JSON.parse(row.media_urls) : row.media_urls)
-                : [],
+              media_urls: finalMediaUrls,
+              images: finalMediaUrls,
               author: {
                 id: row.author_id,
                 name: row.author_name || 'User',
+                username: row.author_user_name || '',
                 user_name: row.author_user_name || '',
                 avatar_url: row.author_avatar || '',
                 avatar: row.author_avatar || '',
+                profile_image_url: row.author_avatar || '',
                 verified: Boolean(row.author_verified),
+                is_verified: Boolean(row.author_verified),
+              },
+              user: {
+                id: row.author_id,
+                name: row.author_name || 'User',
+                username: row.author_user_name || '',
+                profile_image_url: row.author_avatar || '',
+                avatar_url: row.author_avatar || '',
+                avatar: row.author_avatar || '',
+                is_verified: Boolean(row.author_verified),
               },
             });
           });

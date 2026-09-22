@@ -1,5 +1,6 @@
 import type { PagesFunction } from "@cloudflare/workers-types";
 import { createNotification } from "../../../utils/createNotification";
+import { withNewContentId } from "../../../utils/ids";
 
 type Env = { DB: D1Database };
 
@@ -50,59 +51,180 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       return json({ success: false, error: "Message is too long" }, 400);
     }
 
-    // Verify post exists
-    const post = await env.DB
-      .prepare(`
-        SELECT p.*, u.name as author_name, u.avatar_url as author_avatar
-        FROM posts p
-        LEFT JOIN users u ON u.id = p.user_id
-        WHERE p.id = ?
-        LIMIT 1
-      `)
+    // Verify post exists (safe query without risky column aliases)
+    let post = await env.DB
+      .prepare(`SELECT * FROM posts WHERE id = ? LIMIT 1`)
       .bind(postId)
       .first<any>();
 
-    if (!post) return json({ success: false, error: "Post not found" }, 404);
+    if (!post) {
+      if (body?.post || body?.shared_post) {
+        post = body.post || body.shared_post;
+      } else {
+        return json({ success: false, error: "Post not found" }, 404);
+      }
+    }
+
+    // Safely lookup original author info
+    let author: any = null;
+    const postOwnerId = toNum(post?.user_id, 0);
+    if (postOwnerId > 0) {
+      try {
+        const u = await env.DB
+          .prepare(`SELECT id, name, username, profile_image_url, is_verified FROM users WHERE id = ? LIMIT 1`)
+          .bind(postOwnerId)
+          .first<any>();
+        if (u) {
+          author = {
+            id: u.id,
+            name: u.name || u.username || 'User',
+            username: u.username || '',
+            user_name: u.username || '',
+            avatar_url: u.profile_image_url || '',
+            avatar: u.profile_image_url || '',
+            profile_image_url: u.profile_image_url || '',
+            verified: Boolean(u.is_verified),
+            is_verified: Boolean(u.is_verified),
+          };
+        }
+      } catch (_) {}
+    }
+
+    // Ensure share tables exist (supports both 'post_shares' and 'shares' schema conventions)
+    try {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS post_shares (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          post_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          destination TEXT DEFAULT 'feed',
+          message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+    } catch (_) {}
+
+    try {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS shares (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          post_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          destination TEXT DEFAULT 'feed',
+          message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+    } catch (_) {}
 
     // Record the share in post_shares table
-    const ins = await env.DB
-      .prepare(`
-        INSERT INTO post_shares (post_id, user_id, destination, message)
-        VALUES (?, ?, ?, ?)
-      `)
-      .bind(postId, userId, destination, message)
-      .run();
+    let shareId = 0;
+    try {
+      const ins1 = await env.DB
+        .prepare(`
+          INSERT INTO post_shares (post_id, user_id, destination, message, created_at)
+          VALUES (?, ?, ?, ?, datetime('now'))
+        `)
+        .bind(postId, userId, destination, message)
+        .run();
+      shareId = toNum(ins1.meta?.last_row_id, 0);
+    } catch (errIns1) {
+      console.error("Failed to insert into post_shares:", errIns1);
+    }
+
+    // Also record into shares table so all share table queries succeed
+    try {
+      const ins2 = await env.DB
+        .prepare(`
+          INSERT INTO shares (post_id, user_id, destination, message, created_at)
+          VALUES (?, ?, ?, ?, datetime('now'))
+        `)
+        .bind(postId, userId, destination, message)
+        .run();
+      if (!shareId) shareId = toNum(ins2.meta?.last_row_id, 0);
+    } catch (errIns2) {
+      console.error("Failed to insert into shares:", errIns2);
+    }
 
     // Create the shared post entry in the posts table so it appears in feeds and user profile
     let createdSharedPost: any = null;
     if (destination === "feed" || destination === "profile") {
+      let newPostId = 0;
       try {
-        const insPost = await env.DB
-          .prepare(`
-            INSERT INTO posts (user_id, content, shared_post_id, created_at, updated_at)
-            VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        const res = await withNewContentId(async (id) => {
+          return await env.DB.prepare(`
+            INSERT INTO posts (id, user_id, content, shared_post_id, visibility, is_deleted, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'public', 0, datetime('now'), datetime('now'))
           `)
-          .bind(userId, message || '', postId)
+          .bind(id, userId, message || '', postId)
           .run();
-        
-        const newPostId = toNum(insPost.meta?.last_row_id, Date.now());
-        createdSharedPost = {
-          id: newPostId,
-          user_id: userId,
-          content: message || '',
-          shared_post_id: postId,
-          shared_post: post,
-          created_at: new Date().toISOString(),
-          reactions_count: 0,
-          comments_count: 0,
-          shares: 0,
-        };
-      } catch (errPost) {
-        console.error("Failed to insert into posts:", errPost);
+        });
+        newPostId = res.id;
+      } catch (errWithId) {
+        try {
+          const insPost = await env.DB
+            .prepare(`
+              INSERT INTO posts (user_id, content, shared_post_id, visibility, is_deleted, created_at, updated_at)
+              VALUES (?, ?, ?, 'public', 0, datetime('now'), datetime('now'))
+            `)
+            .bind(userId, message || '', postId)
+            .run();
+          newPostId = toNum(insPost.meta?.last_row_id, Date.now());
+        } catch (errPost) {
+          console.error("Failed to insert into posts:", errPost);
+        }
       }
+
+      // Fetch sharing user details
+      let sharingUser: any = null;
+      try {
+        sharingUser = await env.DB
+          .prepare(`SELECT id, name, username, profile_image_url, is_verified FROM users WHERE id = ? LIMIT 1`)
+          .bind(userId)
+          .first<any>();
+      } catch (_) {}
+
+      const sharedPostPayload = {
+        ...post,
+        author: author || post?.author || {
+          id: post?.user_id,
+          name: post?.author_name || 'User',
+          username: post?.author_username || '',
+          avatar_url: post?.author_avatar || '',
+          profile_image_url: post?.author_avatar || '',
+        },
+        user: author || post?.user,
+      };
+
+      createdSharedPost = {
+        id: newPostId || Date.now(),
+        post_id: newPostId || Date.now(),
+        user_id: userId,
+        author: sharingUser ? {
+          id: sharingUser.id,
+          name: sharingUser.name || sharingUser.username || 'User',
+          username: sharingUser.username || '',
+          user_name: sharingUser.username || '',
+          avatar_url: sharingUser.profile_image_url || '',
+          avatar: sharingUser.profile_image_url || '',
+          profile_image_url: sharingUser.profile_image_url || '',
+          verified: Boolean(sharingUser.is_verified),
+          is_verified: Boolean(sharingUser.is_verified),
+        } : null,
+        user: sharingUser,
+        content: message || '',
+        shared_post_id: postId,
+        shared_post: sharedPostPayload,
+        created_at: new Date().toISOString(),
+        reactions_count: 0,
+        comments_count: 0,
+        shares: 0,
+        shares_count: 0,
+        visibility: 'public',
+      };
     }
 
-    // Keep the denormalized counter in sync (best-effort)
+    // Keep the denormalized counter in sync on original post (best-effort)
     try {
       await env.DB
         .prepare(`UPDATE posts SET shares = COALESCE(shares, 0) + 1 WHERE id = ?`)
@@ -111,7 +233,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
     } catch (_) {}
 
     // Notify post owner (never self)
-    const ownerId = toNum(post.user_id, 0);
+    const ownerId = toNum(post?.user_id, 0);
     if (ownerId && ownerId !== userId) {
       try {
         await createNotification(
@@ -127,21 +249,32 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
     }
 
     // Return fresh count
-    const countRow = await env.DB
-      .prepare(`SELECT COUNT(*) AS c FROM post_shares WHERE post_id = ?`)
-      .bind(postId)
-      .first<{ c: number }>();
-
-    const finalSharesCount = toNum(countRow?.c, toNum(post.shares, 0) + 1);
+    let finalSharesCount = toNum(post.shares, 0) + 1;
+    try {
+      const countRow = await env.DB
+        .prepare(`SELECT COUNT(*) AS c FROM post_shares WHERE post_id = ?`)
+        .bind(postId)
+        .first<{ c: number }>();
+      if (countRow?.c) finalSharesCount = toNum(countRow.c, finalSharesCount);
+    } catch (_) {
+      try {
+        const countRow2 = await env.DB
+          .prepare(`SELECT COUNT(*) AS c FROM shares WHERE post_id = ?`)
+          .bind(postId)
+          .first<{ c: number }>();
+        if (countRow2?.c) finalSharesCount = toNum(countRow2.c, finalSharesCount);
+      } catch (_) {}
+    }
 
     return json({
       success: true,
-      share_id: toNum(ins.meta?.last_row_id, 0),
+      share_id: shareId,
       post_id: postId,
       destination,
+      shares: finalSharesCount,
       shares_count: finalSharesCount,
       post: createdSharedPost,
-      shared_post: post,
+      shared_post: createdSharedPost?.shared_post || post,
     });
   } catch (err: any) {
     return json(

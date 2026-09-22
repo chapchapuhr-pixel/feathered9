@@ -107,9 +107,22 @@ export const resolveApiUrl = (url: string): string => {
 export const apiFetch = async (url: string, options: RequestInit = {}): Promise<any> => {
   const targetUrl = resolveApiUrl(url);
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('unera_token') : null;
+
+  let currentUserId: string | null = null;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const uStr = localStorage.getItem('social_platform_current_user') || localStorage.getItem('unera_user');
+      if (uStr) {
+        const parsed = JSON.parse(uStr);
+        if (parsed?.id) currentUserId = String(parsed.id);
+      }
+    } catch (_) {}
+  }
+
   const headers: HeadersInit = {
     Accept: 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(currentUserId ? { 'x-user-id': currentUserId } : {}),
     ...(options.headers || {}),
   };
 
@@ -154,3 +167,45 @@ export const apiFetch = async (url: string, options: RequestInit = {}): Promise<
     clearTimeout(timeoutId);
   }
 };
+
+/**
+ * Share a post to feed or profile. Calls POST /api/posts/:id/share with x-user-id header.
+ */
+export async function sharePost(
+  postId: number,
+  userId: number,
+  options: {
+    destination?: string;
+    message?: string;
+    content?: string;
+    feeling?: string;
+    location?: string;
+    audience?: string;
+    shared_post?: any;
+    post?: any;
+  } = {}
+) {
+  const targetUrl = resolveApiUrl(`/api/posts/${postId}/share`);
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('unera_token') : null;
+  const res = await fetch(targetUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "x-user-id": String(userId),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      destination: options.destination || "feed",
+      message: options.message || options.content || "",
+      feeling: options.feeling,
+      location: options.location,
+      audience: options.audience,
+      post: options.post,
+      shared_post: options.shared_post,
+    }),
+  });
+
+  return res.json();
+}

@@ -10660,6 +10660,10 @@ const handleShareComplete = useCallback(
 
           await apiFetch(shareEndpoint, {
             method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': String(currentUser?.id || shareBody.user_id || ''),
+            },
             body: JSON.stringify(shareBody),
           });
         } catch (error) {

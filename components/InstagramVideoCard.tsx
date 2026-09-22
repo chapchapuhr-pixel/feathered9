@@ -1022,6 +1022,10 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
     try {
       const res = await apiFetch(`/api/posts/${activePostId}/share`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser?.id || 1),
+        },
         body: JSON.stringify({
           destination: 'feed',
           user_id: currentUser?.id || 1,

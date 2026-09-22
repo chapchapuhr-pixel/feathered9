@@ -2042,7 +2042,15 @@ export const ShareBottomSheet = memo(
         };
         const response = await apiFetch(endpoint, {
           method: 'POST',
-          body: JSON.stringify(payload),
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': String(currentUser.id),
+          },
+          body: JSON.stringify({
+            ...payload,
+            user_id: currentUser.id,
+            destination: destination || 'feed',
+          }),
         });
         if (onShareComplete) {
           const nextShares = safeNumber(
