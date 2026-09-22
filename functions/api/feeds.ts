@@ -291,7 +291,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     wherePosts.push(
       `(p.visibility IS NULL OR p.visibility = 'public' OR p.visibility = '' OR p.visibility = 'Public')`
     );
-
     wherePosts.push(`COALESCE(p.is_deleted, 0) = 0`);
 
     wherePosts.push(`(p.content IS NULL OR (
@@ -535,7 +534,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ps.user_id AS owner_id,
         'user_id' AS owner_field,
 
-        -- Sharer's info (top-level author of the card)
         COALESCE(su.username, 'user') AS username,
         COALESCE(su.name, su.username, 'User') AS name,
         CASE
@@ -551,11 +549,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(su.is_verified, 0) AS is_verified,
         COALESCE(su.role, 'user') AS role,
 
-        -- Sharer's message / description (content of the share wrapper)
         COALESCE(ps.message, '') AS content,
         COALESCE(ps.message, '') AS description,
         COALESCE(ps.message, '') AS message,
-        COALESCE(ps.message, '') AS caption,
         p.visibility AS visibility,
         p.views AS views,
         p.shares AS shares,
@@ -602,45 +598,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           LIMIT 1
         ) AS reactor_name,
 
-        (
-          SELECT json_group_array(
-            json_object(
-              'user_id', x.user_id,
-              'type', x.type,
-              'name', x.name,
-              'profile_image_url', x.profile_image_url
-            )
-          )
-          FROM (
-            SELECT
-              pr3.user_id AS user_id,
-              LOWER(COALESCE(pr3.type,'like')) AS type,
-              COALESCE(u3.name, u3.username, '') AS name,
-              CASE
-                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u3.profile_image_url) > 300 THEN NULL
-                ELSE u3.profile_image_url
-              END AS profile_image_url
-            FROM post_reactions pr3
-            LEFT JOIN users u3 ON u3.id = pr3.user_id
-            WHERE pr3.post_id = p.id
-            ORDER BY pr3.created_at DESC, pr3.id DESC
-            LIMIT 30
-          ) x
-        ) AS reactions_preview,
-
-        (
-          SELECT json_group_array(
-            json_object('type', t.type, 'count', t.c)
-          )
-          FROM (
-            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
-            FROM post_reactions
-            WHERE post_id = p.id
-            GROUP BY LOWER(COALESCE(type,'like'))
-            ORDER BY c DESC
-          ) t
-        ) AS reactions_by_type,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
 
         NULL AS video_url, NULL AS caption, NULL AS song_name,
         NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
@@ -658,34 +617,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         'share' AS post_type,
         'share' AS kind,
 
-        -- meta JSON (backward compat)
         json_object(
           'kind', 'share',
           'type', 'share',
           'share_id', ps.id,
           'original_post_id', p.id,
           'destination', ps.destination,
-          'message', ps.message,
-          'description', ps.message,
-          'sharer', json_object(
-            'id', ps.user_id,
-            'name', COALESCE(su.name, su.username, ''),
-            'username', su.username,
-            'profile_image_url', su.profile_image_url,
-            'is_verified', CASE WHEN COALESCE(su.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
-            'verified', CASE WHEN COALESCE(su.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
-          ),
-          'original_author', json_object(
-            'id', p.user_id,
-            'name', COALESCE(u.name, u.username, ''),
-            'username', u.username,
-            'profile_image_url', u.profile_image_url,
-            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
-            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
-          )
+          'message', ps.message
         ) AS meta,
 
-        -- ✅ Fully populated shared_post
         json_object(
           'id', p.id,
           'user_id', p.user_id,
@@ -781,6 +721,736 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       JOIN posts p ON p.id = ps.post_id
       LEFT JOIN users su ON su.id = ps.user_id
       LEFT JOIN users u ON u.id = p.user_id
+    `;
+
+    // ============================================================
+    // 1c) PRODUCT SHARES
+    // ============================================================
+    const whereProductShares: string[] = [];
+    const bindsProductShares: any[] = [];
+
+    whereProductShares.push(`psh.destination = 'feed'`);
+    whereProductShares.push(`COALESCE(pr.is_deleted, 0) = 0`);
+
+    if (cursor && cursor.trim()) {
+      whereProductShares.push(`psh.shared_at < ?`);
+      bindsProductShares.push(cursor.trim());
+    }
+    if (seen.length > 0) {
+      whereProductShares.push(`pr.id NOT IN (${seen.map(() => "?").join(",")})`);
+      bindsProductShares.push(...seen);
+    }
+    if (seenKeys.length > 0) {
+      whereProductShares.push(
+        `('product_share:' || CAST(psh.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`
+      );
+      bindsProductShares.push(...seenKeys);
+    }
+
+    const whereProductSharesSql = whereProductShares.length
+      ? `WHERE ${whereProductShares.join(" AND ")}`
+      : "";
+
+    const baseSelectProductShares = `
+      SELECT
+        'product_share' AS source,
+        'product_share' AS item_type,
+
+        psh.id AS id,
+        ('product_share:' || CAST(psh.id AS TEXT)) AS feed_key,
+
+        psh.shared_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        NULL AS shared_post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        pr.id AS product_id2,
+
+        psh.user_id AS user_id,
+        psh.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(psh.message, '') AS content,
+        COALESCE(psh.message, '') AS description,
+        COALESCE(psh.message, '') AS message,
+        'public' AS visibility,
+        0 AS views, 0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        0 AS comments_count,
+        0 AS reactions_count,
+        NULL AS my_reaction,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url, NULL AS caption, NULL AS song_name,
+        NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
+        NULL AS location, NULL AS sound_key, NULL AS sound_id,
+
+        NULL AS song_title, NULL AS song_artist_name, NULL AS song_album_name,
+        NULL AS song_cover_image_url, NULL AS song_duration_seconds,
+        NULL AS song_genre, NULL AS song_likes_count, NULL AS song_plays_count,
+
+        NULL AS event_date, NULL AS event_description,
+        NULL AS attending_count, NULL AS interested_count,
+        NULL AS my_rsvp_status,
+
+        'product_share' AS type,
+        'product_share' AS post_type,
+        'product_share' AS kind,
+
+        json_object(
+          'kind', 'product_share',
+          'type', 'product_share',
+          'share_id', psh.id,
+          'original_product_id', pr.id,
+          'destination', psh.destination,
+          'message', psh.message
+        ) AS meta,
+
+        json_object(
+          'id', pr.id,
+          'seller_id', pr.seller_id,
+          'user_id', pr.seller_id,
+          'title', pr.title,
+          'category', pr.category,
+          'description', pr.description,
+          'country', pr.country,
+          'address', pr.address,
+          'main_price', pr.main_price,
+          'discount_price', pr.discount_price,
+          'price', COALESCE(pr.discount_price, pr.main_price),
+          'currency', 'TZS',
+          'quantity', pr.quantity,
+          'phone_number', pr.phone_number,
+          'images', pr.images,
+          'media_urls', pr.images,
+          'image_variants', pr.image_variants,
+          'thumbnail_url', pr.thumbnail_url,
+          'created_at', pr.created_at,
+
+          'author', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+
+          'user', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_product,
+
+        NULL AS shared_post,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
+
+        NULL AS group_id, NULL AS group_name, NULL AS group_image
+      FROM product_shares psh
+      JOIN products pr ON pr.id = psh.product_id
+      LEFT JOIN users su ON su.id = psh.user_id
+      LEFT JOIN users u ON u.id = pr.seller_id
+    `;
+
+    // ============================================================
+    // 1d) SONG SHARES
+    // ============================================================
+    const whereSongShares: string[] = [];
+    const bindsSongShares: any[] = [];
+
+    whereSongShares.push(`ssh.destination = 'feed'`);
+    whereSongShares.push(`COALESCE(s.is_deleted, 0) = 0`);
+
+    if (cursor && cursor.trim()) {
+      whereSongShares.push(`ssh.shared_at < ?`);
+      bindsSongShares.push(cursor.trim());
+    }
+    if (seen.length > 0) {
+      whereSongShares.push(`s.id NOT IN (${seen.map(() => "?").join(",")})`);
+      bindsSongShares.push(...seen);
+    }
+    if (seenKeys.length > 0) {
+      whereSongShares.push(
+        `('song_share:' || CAST(ssh.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`
+      );
+      bindsSongShares.push(...seenKeys);
+    }
+
+    const whereSongSharesSql = whereSongShares.length
+      ? `WHERE ${whereSongShares.join(" AND ")}`
+      : "";
+
+    const baseSelectSongShares = `
+      SELECT
+        'song_share' AS source,
+        'song_share' AS item_type,
+
+        ssh.id AS id,
+        ('song_share:' || CAST(ssh.id AS TEXT)) AS feed_key,
+
+        ssh.shared_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        NULL AS shared_post_id,
+        NULL AS reel_id,
+        s.id AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        ssh.user_id AS user_id,
+        ssh.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(ssh.message, '') AS content,
+        COALESCE(ssh.message, '') AS description,
+        COALESCE(ssh.message, '') AS message,
+        'public' AS visibility,
+        0 AS views, 0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        0 AS comments_count,
+        0 AS reactions_count,
+        NULL AS my_reaction,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url,
+        NULL AS caption,
+        NULL AS song_name,
+        s.audio_url AS audio_url,
+        0 AS audio_start,
+        0 AS audio_end,
+        NULL AS location,
+        NULL AS sound_key,
+        NULL AS sound_id,
+
+        s.title AS song_title,
+        s.artist_name AS song_artist_name,
+        s.album_name AS song_album_name,
+        s.cover_image_url AS song_cover_image_url,
+        s.duration_seconds AS song_duration_seconds,
+        s.genre AS song_genre,
+        0 AS song_likes_count,
+        0 AS song_plays_count,
+
+        NULL AS event_date, NULL AS event_description,
+        NULL AS attending_count, NULL AS interested_count,
+        NULL AS my_rsvp_status,
+
+        'song_share' AS type,
+        'song_share' AS post_type,
+        'song_share' AS kind,
+
+        json_object(
+          'kind', 'song_share',
+          'type', 'song_share',
+          'share_id', ssh.id,
+          'original_song_id', s.id,
+          'destination', ssh.destination,
+          'message', ssh.message,
+          'item_type', ssh.item_type
+        ) AS meta,
+
+        json_object(
+          'id', s.id,
+          'uploader_id', s.uploader_id,
+          'user_id', s.uploader_id,
+          'title', s.title,
+          'artist_name', s.artist_name,
+          'album_name', s.album_name,
+          'cover_image_url', s.cover_image_url,
+          'audio_url', s.audio_url,
+          'duration_seconds', s.duration_seconds,
+          'genre', s.genre,
+          'created_at', s.created_at,
+
+          'author', json_object(
+            'id', s.uploader_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+
+          'user', json_object(
+            'id', s.uploader_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_song,
+
+        NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_event,
+        NULL AS shared_story,
+
+        NULL AS group_id, NULL AS group_name, NULL AS group_image
+      FROM song_shares ssh
+      JOIN songs s ON s.id = ssh.song_id
+      LEFT JOIN users su ON su.id = ssh.user_id
+      LEFT JOIN users u ON u.id = s.uploader_id
+    `;
+
+    // ============================================================
+    // 1e) EVENT SHARES
+    // ============================================================
+    const whereEventShares: string[] = [];
+    const bindsEventShares: any[] = [];
+
+    whereEventShares.push(`esh.destination = 'feed'`);
+    whereEventShares.push(`COALESCE(e.is_deleted, 0) = 0`);
+
+    if (cursor && cursor.trim()) {
+      whereEventShares.push(`esh.shared_at < ?`);
+      bindsEventShares.push(cursor.trim());
+    }
+    if (seen.length > 0) {
+      whereEventShares.push(`e.id NOT IN (${seen.map(() => "?").join(",")})`);
+      bindsEventShares.push(...seen);
+    }
+    if (seenKeys.length > 0) {
+      whereEventShares.push(
+        `('event_share:' || CAST(esh.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`
+      );
+      bindsEventShares.push(...seenKeys);
+    }
+
+    const whereEventSharesSql = whereEventShares.length
+      ? `WHERE ${whereEventShares.join(" AND ")}`
+      : "";
+
+    const baseSelectEventShares = `
+      SELECT
+        'event_share' AS source,
+        'event_share' AS item_type,
+
+        esh.id AS id,
+        ('event_share:' || CAST(esh.id AS TEXT)) AS feed_key,
+
+        esh.shared_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        NULL AS shared_post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        e.id AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        esh.user_id AS user_id,
+        esh.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(esh.message, '') AS content,
+        COALESCE(esh.message, '') AS description,
+        COALESCE(esh.message, '') AS message,
+        'public' AS visibility,
+        0 AS views, 0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        0 AS comments_count,
+        0 AS reactions_count,
+        NULL AS my_reaction,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url, NULL AS caption, NULL AS song_name,
+        NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
+        e.location AS location,
+        NULL AS sound_key, NULL AS sound_id,
+
+        NULL AS song_title, NULL AS song_artist_name, NULL AS song_album_name,
+        NULL AS song_cover_image_url, NULL AS song_duration_seconds,
+        NULL AS song_genre, NULL AS song_likes_count, NULL AS song_plays_count,
+
+        e.event_date AS event_date,
+        e.description AS event_description,
+        0 AS attending_count,
+        0 AS interested_count,
+        '' AS my_rsvp_status,
+
+        'event_share' AS type,
+        'event_share' AS post_type,
+        'event_share' AS kind,
+
+        json_object(
+          'kind', 'event_share',
+          'type', 'event_share',
+          'share_id', esh.id,
+          'original_event_id', e.id,
+          'destination', esh.destination,
+          'message', esh.message
+        ) AS meta,
+
+        json_object(
+          'id', e.id,
+          'creator_id', e.creator_id,
+          'user_id', e.creator_id,
+          'title', e.title,
+          'description', e.description,
+          'event_date', e.event_date,
+          'location', e.location,
+          'cover_url', e.cover_url,
+          'visibility', e.visibility,
+          'created_at', e.created_at,
+
+          'author', json_object(
+            'id', e.creator_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+
+          'user', json_object(
+            'id', e.creator_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_event,
+
+        NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_story,
+
+        NULL AS group_id, NULL AS group_name, NULL AS group_image
+      FROM event_shares esh
+      JOIN events e ON e.id = esh.event_id
+      LEFT JOIN users su ON su.id = esh.user_id
+      LEFT JOIN users u ON u.id = e.creator_id
+    `;
+
+    // ============================================================
+    // 1f) STORY SHARES
+    // ============================================================
+    const whereStoryShares: string[] = [];
+    const bindsStoryShares: any[] = [];
+
+    whereStoryShares.push(`COALESCE(st.is_deleted, 0) = 0`);
+
+    if (cursor && cursor.trim()) {
+      whereStoryShares.push(`ss.created_at < ?`);
+      bindsStoryShares.push(cursor.trim());
+    }
+    if (seen.length > 0) {
+      whereStoryShares.push(`st.id NOT IN (${seen.map(() => "?").join(",")})`);
+      bindsStoryShares.push(...seen);
+    }
+    if (seenKeys.length > 0) {
+      whereStoryShares.push(
+        `('story_share:' || CAST(ss.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`
+      );
+      bindsStoryShares.push(...seenKeys);
+    }
+
+    const whereStorySharesSql = whereStoryShares.length
+      ? `WHERE ${whereStoryShares.join(" AND ")}`
+      : "";
+
+    const baseSelectStoryShares = `
+      SELECT
+        'story_share' AS source,
+        'story_share' AS item_type,
+
+        ss.id AS id,
+        ('story_share:' || CAST(ss.id AS TEXT)) AS feed_key,
+
+        ss.created_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        NULL AS shared_post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        ss.user_id AS user_id,
+        ss.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        '' AS content,
+        '' AS description,
+        NULL AS message,
+        'public' AS visibility,
+        0 AS views, 0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        0 AS comments_count,
+        0 AS reactions_count,
+        NULL AS my_reaction,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url, NULL AS caption, NULL AS song_name,
+        NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
+        NULL AS location, NULL AS sound_key, NULL AS sound_id,
+
+        NULL AS song_title, NULL AS song_artist_name, NULL AS song_album_name,
+        NULL AS song_cover_image_url, NULL AS song_duration_seconds,
+        NULL AS song_genre, NULL AS song_likes_count, NULL AS song_plays_count,
+
+        NULL AS event_date, NULL AS event_description,
+        NULL AS attending_count, NULL AS interested_count,
+        NULL AS my_rsvp_status,
+
+        'story_share' AS type,
+        'story_share' AS post_type,
+        'story_share' AS kind,
+
+        json_object(
+          'kind', 'story_share',
+          'type', 'story_share',
+          'share_id', ss.id,
+          'original_story_id', st.id
+        ) AS meta,
+
+        json_object(
+          'id', st.id,
+          'user_id', st.user_id,
+          'type', st.type,
+          'media_url', st.media_url,
+          'text_content', st.text_content,
+          'background_style', st.background_style,
+          'music_url', st.music_url,
+          'music_title', st.music_title,
+          'media_urls', st.media_urls,
+          'media_types', st.media_types,
+          'media_meta', st.media_meta,
+          'effect_id', st.effect_id,
+          'duration', st.duration,
+          'created_at', st.created_at,
+
+          'author', json_object(
+            'id', st.user_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+
+          'user', json_object(
+            'id', st.user_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_story,
+
+        NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+
+        NULL AS group_id, NULL AS group_name, NULL AS group_image
+      FROM story_shares ss
+      JOIN stories st ON st.id = ss.story_id
+      LEFT JOIN users su ON su.id = ss.user_id
+      LEFT JOIN users u ON u.id = st.user_id
     `;
 
     // ============================================================
@@ -902,6 +1572,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ) AS meta,
 
         NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM songs s
@@ -1044,6 +1718,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ) AS meta,
 
         NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM events e
@@ -1177,7 +1855,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         NULL AS type, NULL AS post_type, NULL AS kind, NULL AS meta,
 
-        NULL AS shared_post
+        NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story
       FROM group_posts gp
       LEFT JOIN users u ON u.id = gp.user_id
       LEFT JOIN groups g ON g.id = gp.group_id
@@ -1297,6 +1979,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ) AS meta,
 
         NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM products pr
@@ -1475,6 +2161,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ) AS meta,
 
         NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM ads a
@@ -1506,6 +2196,54 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         : [];
     } catch (errShares) {
       console.warn("freshShares query fallback:", errShares);
+    }
+
+    let freshProductShares: any[] = [];
+    try {
+      const res = await env.DB.prepare(
+        `${baseSelectProductShares} ${whereProductSharesSql} ORDER BY psh.shared_at DESC LIMIT ?`
+      )
+        .bind(reactionUserId, ...bindsProductShares, freshCount)
+        .all();
+      freshProductShares = Array.isArray(res?.results) ? res.results : [];
+    } catch (err) {
+      console.warn("freshProductShares fallback:", err);
+    }
+
+    let freshSongShares: any[] = [];
+    try {
+      const res = await env.DB.prepare(
+        `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY ssh.shared_at DESC LIMIT ?`
+      )
+        .bind(reactionUserId, ...bindsSongShares, freshCount)
+        .all();
+      freshSongShares = Array.isArray(res?.results) ? res.results : [];
+    } catch (err) {
+      console.warn("freshSongShares fallback:", err);
+    }
+
+    let freshEventShares: any[] = [];
+    try {
+      const res = await env.DB.prepare(
+        `${baseSelectEventShares} ${whereEventSharesSql} ORDER BY esh.shared_at DESC LIMIT ?`
+      )
+        .bind(reactionUserId, ...bindsEventShares, freshCount)
+        .all();
+      freshEventShares = Array.isArray(res?.results) ? res.results : [];
+    } catch (err) {
+      console.warn("freshEventShares fallback:", err);
+    }
+
+    let freshStoryShares: any[] = [];
+    try {
+      const res = await env.DB.prepare(
+        `${baseSelectStoryShares} ${whereStorySharesSql} ORDER BY ss.created_at DESC LIMIT ?`
+      )
+        .bind(reactionUserId, ...bindsStoryShares, freshCount)
+        .all();
+      freshStoryShares = Array.isArray(res?.results) ? res.results : [];
+    } catch (err) {
+      console.warn("freshStoryShares fallback:", err);
     }
 
     const freshSongsRes = await env.DB.prepare(
@@ -1563,6 +2301,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     // ============================================================
     let explorePosts: any[] = [];
     let exploreShares: any[] = [];
+    let exploreProductShares: any[] = [];
+    let exploreSongShares: any[] = [];
+    let exploreEventShares: any[] = [];
+    let exploreStoryShares: any[] = [];
     let exploreSongs: any[] = [];
     let exploreEvents: any[] = [];
     let exploreGroupPosts: any[] = [];
@@ -1579,17 +2321,49 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       explorePosts = Array.isArray(explorePostsRes?.results) ? explorePostsRes.results : [];
 
       try {
-        const exploreSharesRes = await env.DB.prepare(
+        const res = await env.DB.prepare(
           `${baseSelectShares} ${whereSharesSql} ORDER BY RANDOM() LIMIT ?`
         )
           .bind(reactionUserId, reactionUserId, ...bindsShares, exploreCount)
           .all();
-        exploreShares = Array.isArray(exploreSharesRes?.results)
-          ? exploreSharesRes.results
-          : [];
-      } catch (errExploreShares) {
-        console.warn("exploreShares query fallback:", errExploreShares);
-      }
+        exploreShares = Array.isArray(res?.results) ? res.results : [];
+      } catch {}
+
+      try {
+        const res = await env.DB.prepare(
+          `${baseSelectProductShares} ${whereProductSharesSql} ORDER BY RANDOM() LIMIT ?`
+        )
+          .bind(reactionUserId, ...bindsProductShares, exploreCount)
+          .all();
+        exploreProductShares = Array.isArray(res?.results) ? res.results : [];
+      } catch {}
+
+      try {
+        const res = await env.DB.prepare(
+          `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY RANDOM() LIMIT ?`
+        )
+          .bind(reactionUserId, ...bindsSongShares, exploreCount)
+          .all();
+        exploreSongShares = Array.isArray(res?.results) ? res.results : [];
+      } catch {}
+
+      try {
+        const res = await env.DB.prepare(
+          `${baseSelectEventShares} ${whereEventSharesSql} ORDER BY RANDOM() LIMIT ?`
+        )
+          .bind(reactionUserId, ...bindsEventShares, exploreCount)
+          .all();
+        exploreEventShares = Array.isArray(res?.results) ? res.results : [];
+      } catch {}
+
+      try {
+        const res = await env.DB.prepare(
+          `${baseSelectStoryShares} ${whereStorySharesSql} ORDER BY RANDOM() LIMIT ?`
+        )
+          .bind(reactionUserId, ...bindsStoryShares, exploreCount)
+          .all();
+        exploreStoryShares = Array.isArray(res?.results) ? res.results : [];
+      } catch {}
 
       const exploreSongsRes = await env.DB.prepare(
         `${baseSelectSongs} ${whereSongsSql} ORDER BY RANDOM() LIMIT ?`
@@ -1655,6 +2429,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const allFeedRows = [
       ...freshPosts,
       ...freshShares,
+      ...freshProductShares,
+      ...freshSongShares,
+      ...freshEventShares,
+      ...freshStoryShares,
       ...freshSongs,
       ...freshEvents,
       ...freshGroupPosts,
@@ -1662,6 +2440,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       ...freshAds,
       ...explorePosts,
       ...exploreShares,
+      ...exploreProductShares,
+      ...exploreSongShares,
+      ...exploreEventShares,
+      ...exploreStoryShares,
       ...exploreSongs,
       ...exploreEvents,
       ...exploreGroupPosts,
@@ -1714,17 +2496,25 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const ordered = orderedRaw.slice(0, limit).map((item: any) => {
       const isVerified = Boolean(
         item?.is_verified &&
-        item?.is_verified !== 0 &&
-        item?.is_verified !== "0" &&
-        item?.is_verified !== false
+          item.is_verified !== 0 &&
+          item.is_verified !== "0" &&
+          item.is_verified !== false
       );
 
       const authorObj = {
         id: item?.user_id || item?.author?.id,
         name: item?.name || item?.author?.name || item?.username || "User",
         username: item?.username || item?.author?.username || "",
-        avatar_url: item?.avatar_url || item?.profile_image_url || item?.author?.profile_image_url || "",
-        profile_image_url: item?.profile_image_url || item?.avatar_url || item?.author?.profile_image_url || "",
+        avatar_url:
+          item?.avatar_url ||
+          item?.profile_image_url ||
+          item?.author?.profile_image_url ||
+          "",
+        profile_image_url:
+          item?.profile_image_url ||
+          item?.avatar_url ||
+          item?.author?.profile_image_url ||
+          "",
         is_verified: isVerified,
         verified: isVerified,
         role: item?.role || item?.author?.role || "user",
@@ -1738,11 +2528,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         verified: isVerified,
         author: authorObj,
         user: authorObj,
-        comments_count: Number((item as any)?.comments_count ?? 0),
-        reactions_count: Number((item as any)?.reactions_count ?? 0),
+        comments_count: Number(item?.comments_count ?? 0),
+        reactions_count: Number(item?.reactions_count ?? 0),
       };
 
-      // Normalize nested shared_post media and verification
+      // Normalize nested shared_post
       if ((item as any)?.shared_post) {
         let sp: any = (item as any).shared_post;
         if (typeof sp === "string") {
@@ -1754,19 +2544,43 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         }
         if (sp && typeof sp === "object") {
           const spVerified = Boolean(
-            (sp.is_verified || sp.verified || sp.author?.is_verified || sp.author?.verified || sp.user?.is_verified) &&
-            sp.is_verified !== 0 &&
-            sp.is_verified !== "0" &&
-            sp.verified !== 0 &&
-            sp.verified !== "0"
+            (sp.is_verified ||
+              sp.verified ||
+              sp.author?.is_verified ||
+              sp.author?.verified ||
+              sp.user?.is_verified) &&
+              sp.is_verified !== 0 &&
+              sp.is_verified !== "0" &&
+              sp.verified !== 0 &&
+              sp.verified !== "0"
           );
 
           const spAuthor = {
             id: sp.user_id || sp.author?.id,
-            name: sp.author?.name || sp.author_name || sp.user?.name || sp.name || "User",
-            username: sp.author?.username || sp.author_username || sp.user?.username || sp.username || "",
-            avatar_url: sp.author?.avatar_url || sp.author?.profile_image_url || sp.author_avatar || sp.author_image || "",
-            profile_image_url: sp.author?.profile_image_url || sp.author?.avatar_url || sp.author_avatar || sp.author_image || "",
+            name:
+              sp.author?.name ||
+              sp.author_name ||
+              sp.user?.name ||
+              sp.name ||
+              "User",
+            username:
+              sp.author?.username ||
+              sp.author_username ||
+              sp.user?.username ||
+              sp.username ||
+              "",
+            avatar_url:
+              sp.author?.avatar_url ||
+              sp.author?.profile_image_url ||
+              sp.author_avatar ||
+              sp.author_image ||
+              "",
+            profile_image_url:
+              sp.author?.profile_image_url ||
+              sp.author?.avatar_url ||
+              sp.author_avatar ||
+              sp.author_image ||
+              "",
             is_verified: spVerified,
             verified: spVerified,
             role: sp.author?.role || sp.user?.role || "user",
@@ -1780,6 +2594,146 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             verified: spVerified,
             author: spAuthor,
             user: spAuthor,
+          };
+        }
+      }
+
+      // Normalize nested shared_product
+      if ((item as any)?.shared_product) {
+        let sp: any = (item as any).shared_product;
+        if (typeof sp === "string") {
+          try {
+            sp = JSON.parse(sp);
+          } catch {
+            sp = null;
+          }
+        }
+        if (sp && typeof sp === "object") {
+          const spVerified = Boolean(sp.author?.is_verified || sp.author?.verified);
+          const spAuthor = {
+            id: sp.seller_id || sp.user_id || sp.author?.id,
+            name: sp.author?.name || sp.author_name || "User",
+            username: sp.author?.username || sp.author_username || "",
+            avatar_url:
+              sp.author?.avatar_url || sp.author?.profile_image_url || "",
+            profile_image_url:
+              sp.author?.profile_image_url || sp.author?.avatar_url || "",
+            is_verified: spVerified,
+            verified: spVerified,
+            role: sp.author?.role || "user",
+          };
+          normalized.shared_product = {
+            ...sp,
+            images: parseJsonArrayUrls(sp.images),
+            media_urls: parseJsonArrayUrls(sp.images),
+            is_verified: spVerified,
+            verified: spVerified,
+            author: spAuthor,
+            user: spAuthor,
+          };
+        }
+      }
+
+      // Normalize nested shared_song
+      if ((item as any)?.shared_song) {
+        let ss: any = (item as any).shared_song;
+        if (typeof ss === "string") {
+          try {
+            ss = JSON.parse(ss);
+          } catch {
+            ss = null;
+          }
+        }
+        if (ss && typeof ss === "object") {
+          const ssVerified = Boolean(ss.author?.is_verified || ss.author?.verified);
+          const ssAuthor = {
+            id: ss.uploader_id || ss.user_id || ss.author?.id,
+            name: ss.author?.name || ss.artist_name || ss.author_name || "User",
+            username: ss.author?.username || ss.author_username || "",
+            avatar_url:
+              ss.author?.avatar_url || ss.author?.profile_image_url || "",
+            profile_image_url:
+              ss.author?.profile_image_url || ss.author?.avatar_url || "",
+            is_verified: ssVerified,
+            verified: ssVerified,
+            role: ss.author?.role || "user",
+          };
+          normalized.shared_song = {
+            ...ss,
+            is_verified: ssVerified,
+            verified: ssVerified,
+            author: ssAuthor,
+            user: ssAuthor,
+          };
+        }
+      }
+
+      // Normalize nested shared_event
+      if ((item as any)?.shared_event) {
+        let se: any = (item as any).shared_event;
+        if (typeof se === "string") {
+          try {
+            se = JSON.parse(se);
+          } catch {
+            se = null;
+          }
+        }
+        if (se && typeof se === "object") {
+          const seVerified = Boolean(se.author?.is_verified || se.author?.verified);
+          const seAuthor = {
+            id: se.creator_id || se.user_id || se.author?.id,
+            name: se.author?.name || se.author_name || "User",
+            username: se.author?.username || se.author_username || "",
+            avatar_url:
+              se.author?.avatar_url || se.author?.profile_image_url || "",
+            profile_image_url:
+              se.author?.profile_image_url || se.author?.avatar_url || "",
+            is_verified: seVerified,
+            verified: seVerified,
+            role: se.author?.role || "user",
+          };
+          normalized.shared_event = {
+            ...se,
+            is_verified: seVerified,
+            verified: seVerified,
+            author: seAuthor,
+            user: seAuthor,
+          };
+        }
+      }
+
+      // Normalize nested shared_story
+      if ((item as any)?.shared_story) {
+        let sst: any = (item as any).shared_story;
+        if (typeof sst === "string") {
+          try {
+            sst = JSON.parse(sst);
+          } catch {
+            sst = null;
+          }
+        }
+        if (sst && typeof sst === "object") {
+          const sstVerified = Boolean(
+            sst.author?.is_verified || sst.author?.verified
+          );
+          const sstAuthor = {
+            id: sst.user_id || sst.author?.id,
+            name: sst.author?.name || sst.author_name || "User",
+            username: sst.author?.username || sst.author_username || "",
+            avatar_url:
+              sst.author?.avatar_url || sst.author?.profile_image_url || "",
+            profile_image_url:
+              sst.author?.profile_image_url || sst.author?.avatar_url || "",
+            is_verified: sstVerified,
+            verified: sstVerified,
+            role: sst.author?.role || "user",
+          };
+          normalized.shared_story = {
+            ...sst,
+            is_verified: sstVerified,
+            verified: sstVerified,
+            author: sstAuthor,
+            user: sstAuthor,
           };
         }
       }
@@ -1868,6 +2822,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           fresh: {
             posts: freshPosts.length,
             shares: freshShares.length,
+            productShares: freshProductShares.length,
+            songShares: freshSongShares.length,
+            eventShares: freshEventShares.length,
+            storyShares: freshStoryShares.length,
             songs: freshSongs.length,
             events: freshEvents.length,
             groupPosts: freshGroupPosts.length,
@@ -1878,6 +2836,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           explore: {
             posts: explorePosts.length,
             shares: exploreShares.length,
+            productShares: exploreProductShares.length,
+            songShares: exploreSongShares.length,
+            eventShares: exploreEventShares.length,
+            storyShares: exploreStoryShares.length,
             songs: exploreSongs.length,
             events: exploreEvents.length,
             groupPosts: exploreGroupPosts.length,
