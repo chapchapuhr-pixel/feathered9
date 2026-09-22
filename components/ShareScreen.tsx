@@ -73,9 +73,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
   const [showAudienceMenu, setShowAudienceMenu] = useState(false);
   const [feeling, setFeeling] = useState('');
   const [location, setLocation] = useState('');
-  const [taggedFriends, setTaggedFriends] = useState<number[]>([]);
-  const [subModal, setSubModal] = useState<'none' | 'tag' | 'location' | 'feeling'>('none');
-  const [searchFriendQuery, setSearchFriendQuery] = useState('');
+  const [subModal, setSubModal] = useState<'none' | 'location' | 'feeling'>('none');
   const [isPosting, setIsPosting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -212,7 +210,6 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         message: shareMessage,
         feeling: feeling || undefined,
         location: location || undefined,
-        taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
         audience,
       };
       if (itemType === 'event') payload.event_id = itemId;
@@ -244,7 +241,6 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
           message: shareMessage,
           feeling: feeling || undefined,
           location: location || undefined,
-          taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
           audience,
           post: response?.shared_post || response?.post || {
             id: response?.id || Date.now(),
@@ -254,7 +250,6 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
             content: shareMessage || '',
             feeling: feeling || undefined,
             location: location || undefined,
-            taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
             shared_post_id: post.id,
             shared_post: post,
             created_at: new Date().toISOString(),
@@ -301,9 +296,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
             <i className="fas fa-arrow-left text-xl"></i>
           </button>
           <h1 className="text-[20px] font-bold text-gray-900 dark:text-gray-100 tracking-tight">
-            {subModal === 'tag'
-              ? 'Tag Friends'
-              : subModal === 'location'
+            {subModal === 'location'
               ? 'Add Location'
               : subModal === 'feeling'
               ? 'How are you feeling?'
@@ -338,79 +331,6 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
           </button>
         )}
       </header>
-
-      {/* Sub-view: Tag Friends */}
-      {subModal === 'tag' && (
-        <div className="flex-1 p-4 flex flex-col overflow-hidden max-w-xl mx-auto w-full">
-          <div className="relative mb-3">
-            <input
-              type="text"
-              placeholder="Search friends..."
-              value={searchFriendQuery}
-              onChange={(e) => setSearchFriendQuery(e.target.value)}
-              className="w-full bg-gray-100 dark:bg-[#1E293B] text-gray-900 dark:text-[#F8FAFC] px-4 py-2.5 pl-10 rounded-xl text-[16px] outline-none border border-gray-200 dark:border-[#334155]"
-              autoFocus
-            />
-            <i className="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"></i>
-          </div>
-          <div className="flex-1 overflow-y-auto space-y-1">
-            {users
-              .filter(
-                (u) =>
-                  u.id !== currentUser?.id &&
-                  (u.name || u.username || '')
-                    .toLowerCase()
-                    .includes(searchFriendQuery.toLowerCase())
-              )
-              .map((u) => {
-                const isSelected = taggedFriends.includes(u.id);
-                return (
-                  <div
-                    key={u.id}
-                    onClick={() => {
-                      setTaggedFriends((prev) =>
-                        isSelected ? prev.filter((id) => id !== u.id) : [...prev, u.id]
-                      );
-                    }}
-                    className="flex items-center justify-between p-3 hover:bg-gray-100 dark:hover:bg-[#1E293B] rounded-xl cursor-pointer transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={avatarFrom(u)}
-                        alt=""
-                        className="w-11 h-11 rounded-full object-cover border border-gray-200 dark:border-gray-700"
-                      />
-                      <div>
-                        <div className="font-semibold text-gray-900 dark:text-gray-100 text-[16px]">
-                          {u.name || u.username}
-                        </div>
-                        {u.username && (
-                          <div className="text-[13px] text-gray-500">@{u.username}</div>
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center border transition-all ${
-                        isSelected
-                          ? 'bg-[#1877F2] border-[#1877F2] text-white'
-                          : 'border-gray-300 dark:border-gray-600'
-                      }`}
-                    >
-                      {isSelected && <i className="fas fa-check text-xs"></i>}
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-          <button
-            type="button"
-            onClick={() => setSubModal('none')}
-            className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold py-3.5 rounded-xl mt-3 text-[16px] transition-colors shadow-md cursor-pointer"
-          >
-            Done ({taggedFriends.length} tagged)
-          </button>
-        </div>
-      )}
 
       {/* Sub-view: Add location */}
       {subModal === 'location' && (
@@ -510,7 +430,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
 
       {/* Main Separate Page View */}
       {subModal === 'none' && (
-        <div className="flex-1 overflow-y-auto px-4 py-4 max-w-xl mx-auto w-full flex flex-col justify-between">
+        <div className="flex-1 overflow-y-auto px-4 py-4 max-w-xl mx-auto w-full flex flex-col">
           <div>
             {/* User Profile Bar */}
             <div className="flex items-center gap-3 mb-3 relative">
@@ -539,15 +459,6 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
                       in{' '}
                       <span className="font-semibold text-gray-900 dark:text-gray-100">
                         {location}
-                      </span>
-                    </span>
-                  )}
-                  {taggedFriends.length > 0 && (
-                    <span className="text-[15px] text-gray-600 dark:text-gray-300">
-                      {' '}
-                      with{' '}
-                      <span className="font-semibold text-gray-900 dark:text-gray-100">
-                        {taggedFriends.length} others
                       </span>
                     </span>
                   )}
@@ -678,26 +589,12 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
               </div>
             </div>
 
-            {/* Action Items: Tag Friends, Add location, Feeling/activity */}
-            <div className="space-y-3.5 mb-6 pt-1">
-              <button
-                type="button"
-                onClick={() => setSubModal('tag')}
-                className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
-              >
-                <i className="fas fa-user-plus text-[#1877F2] text-xl w-6 text-center"></i>
-                <span className="text-[17px] font-medium">Tag Friends</span>
-                {taggedFriends.length > 0 && (
-                  <span className="ml-auto text-[13px] bg-blue-100 dark:bg-blue-900/40 text-[#1877F2] px-2.5 py-0.5 rounded-full font-semibold">
-                    {taggedFriends.length} selected
-                  </span>
-                )}
-              </button>
-
+            {/* Action Items: Add location, Feeling/activity */}
+            <div className="space-y-2 mb-4 pt-1 border-t border-gray-100 dark:border-[#1E293B]/70">
               <button
                 type="button"
                 onClick={() => setSubModal('location')}
-                className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
+                className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1.5"
               >
                 <i className="fas fa-map-marker-alt text-[#EC4899] text-xl w-6 text-center"></i>
                 <span className="text-[17px] font-medium">Add location</span>
@@ -711,7 +608,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setSubModal('feeling')}
-                className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1"
+                className="w-full flex items-center gap-3.5 text-left text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer py-1.5"
               >
                 <i className="far fa-smile text-[#F59E0B] text-xl w-6 text-center"></i>
                 <span className="text-[17px] font-medium">Feeling/activity</span>
@@ -724,8 +621,8 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
             </div>
           </div>
 
-          {/* Bottom Primary Full-Width POST Button */}
-          <div className="mt-auto pt-4 pb-4">
+          {/* Prominently Pulled-Up Primary Full-Width POST Button */}
+          <div className="pt-2 pb-6">
             <button
               type="button"
               onClick={handlePostSubmit}

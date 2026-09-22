@@ -10543,26 +10543,49 @@ const handleOpenShareSheet = useCallback(
 );
 
 const handleShareComplete = useCallback(
-  async (destination: string, data?: any) => {
-    if (data?.success && activeSharePost) {
-      setPosts((prev) => {
-        const next = safeArray(prev).map((p: any) =>
-          Number(p.id) === Number(activeSharePost.id)
-            ? normalizePost({ ...p, shares: safeNumber(p.shares) + 1 })
-            : p
-        );
-        lastGoodPostsRef.current = next;
-        stableFeedRef.current = next;
-        return next;
-      });
+  async (destination: string, data?: any, sourcePost?: any) => {
+    const targetPost =
+      sourcePost ||
+      activeSharePost ||
+      data?.post?.shared_post ||
+      data?.shared_post ||
+      (data?.post?.shared_post_id
+        ? posts.find((p: any) => Number(p.id) === Number(data.post.shared_post_id))
+        : null);
 
-      setProfilePosts((prev) => {
-        return safeArray(prev).map((p: any) =>
-          Number(p.id) === Number(activeSharePost.id)
-            ? normalizePost({ ...p, shares: safeNumber(p.shares) + 1 })
-            : p
-        );
-      });
+    const targetPostId = Number(
+      targetPost?.id || targetPost?.post_id || data?.post?.shared_post_id || 0
+    );
+
+    if (data?.success || targetPost) {
+      if (targetPostId) {
+        setPosts((prev) => {
+          const next = safeArray(prev).map((p: any) =>
+            Number(p.id) === targetPostId
+              ? normalizePost({
+                  ...p,
+                  shares: safeNumber(p.shares) + 1,
+                  shares_count: safeNumber(p.shares_count ?? p.shares) + 1,
+                })
+              : p
+          );
+          lastGoodPostsRef.current = next;
+          stableFeedRef.current = next;
+          return next;
+        });
+
+        setProfilePosts((prev) => {
+          return safeArray(prev).map((p: any) =>
+            Number(p.id) === targetPostId
+              ? normalizePost({
+                  ...p,
+                  shares: safeNumber(p.shares) + 1,
+                  shares_count: safeNumber(p.shares_count ?? p.shares) + 1,
+                })
+              : p
+          );
+        });
+      }
 
       // If shared to Feed or Profile, immediately insert the new shared post card
       if (destination === 'feed' || destination === 'profile') {
@@ -10572,8 +10595,8 @@ const handleShareComplete = useCallback(
           user_id: currentUser?.id,
           author: currentUser,
           content: data?.message || data?.data?.message || '',
-          shared_post_id: activeSharePost.id,
-          shared_post: activeSharePost,
+          shared_post_id: targetPostId || targetPost?.id,
+          shared_post: targetPost,
           created_at: new Date().toISOString(),
           shares: 0,
           shares_count: 0,
@@ -10583,42 +10606,54 @@ const handleShareComplete = useCallback(
           comments: [],
         };
 
-        const newSharedItem = normalizePost(rawNewPost);
+        const newSharedItem = normalizePost({
+          ...rawNewPost,
+          author: rawNewPost.author || currentUser,
+          user: rawNewPost.user || currentUser,
+          shared_post: rawNewPost.shared_post || targetPost,
+          shared_post_id: rawNewPost.shared_post_id || targetPostId,
+        });
 
         setPosts((prev) => {
-          const next = [newSharedItem, ...safeArray(prev)];
+          const next = [
+            newSharedItem,
+            ...safeArray(prev).filter((p: any) => Number(p.id) !== Number(newSharedItem.id)),
+          ];
           lastGoodPostsRef.current = next;
           stableFeedRef.current = next;
           return next;
         });
 
-        setProfilePosts((prev) => [newSharedItem, ...safeArray(prev)]);
+        setProfilePosts((prev) => [
+          newSharedItem,
+          ...safeArray(prev).filter((p: any) => Number(p.id) !== Number(newSharedItem.id)),
+        ]);
       }
 
       // If ShareBottomSheet did not already execute the network call, record it
-      if (!data?.data) {
+      if (!data?.data && targetPostId) {
         try {
-          let shareEndpoint = `/api/posts/${activeSharePost.id}/share`;
+          let shareEndpoint = `/api/posts/${targetPostId}/share`;
           let shareBody: any = { destination, user_id: currentUser?.id, message: data?.message };
 
-          const isGroupPost = !!(activeSharePost.group_id || activeSharePost.item_type === 'group_post');
-          const isSong = !!(activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.item_type === 'song' || activeSharePost.item_type === 'music');
-          const isProduct = !!(activeSharePost.product_id || activeSharePost.item_type === 'product');
-          const isEvent = !!(activeSharePost.event_id || activeSharePost.item_type === 'event');
+          const isGroupPost = !!(targetPost?.group_id || targetPost?.item_type === 'group_post');
+          const isSong = !!(targetPost?.song_id || targetPost?.song_id2 || targetPost?.item_type === 'song' || targetPost?.item_type === 'music');
+          const isProduct = !!(targetPost?.product_id || targetPost?.item_type === 'product');
+          const isEvent = !!(targetPost?.event_id || targetPost?.item_type === 'event');
 
           if (isGroupPost) {
             shareEndpoint = `/api/groups/posts/share`;
-            shareBody = { destination, post_id: activeSharePost.id, group_id: activeSharePost.group_id, user_id: currentUser?.id };
+            shareBody = { destination, post_id: targetPostId, group_id: targetPost.group_id, user_id: currentUser?.id };
           } else if (isSong) {
-            const songId = activeSharePost.song_id || activeSharePost.song_id2 || activeSharePost.id;
+            const songId = targetPost.song_id || targetPost.song_id2 || targetPostId;
             shareEndpoint = `/api/songs/${songId}/share`;
             shareBody = { destination, song_id: songId, user_id: currentUser?.id };
           } else if (isProduct) {
-            const prodId = activeSharePost.product_id || activeSharePost.id;
+            const prodId = targetPost.product_id || targetPostId;
             shareEndpoint = `/api/products/${prodId}/share`;
             shareBody = { destination, product_id: prodId, user_id: currentUser?.id };
           } else if (isEvent) {
-            const evId = activeSharePost.event_id || activeSharePost.id;
+            const evId = targetPost.event_id || targetPostId;
             shareEndpoint = `/api/events/${evId}/share`;
             shareBody = { destination, event_id: evId, user_id: currentUser?.id };
           }
@@ -10638,7 +10673,7 @@ const handleShareComplete = useCallback(
     setShowShareSheet(false);
     scheduleSilentRefresh();
   },
-  [activeSharePost, currentUser, scheduleSilentRefresh]
+  [activeSharePost, currentUser, posts, scheduleSilentRefresh]
 );
 
 const deletePost = useCallback(
@@ -11223,9 +11258,9 @@ return (
   users={users}
   onProfileClick={openProfile}
   onReact={(post, type) => reactToFeedItem(post, type)}
-  onShare={(id, newShareCount) =>
-    console.log("Share:", id, newShareCount)
-  }
+  onShare={(id, newShareCount, data, sourcePost) => {
+    handleShareComplete('feed', data || { success: true, shares: newShareCount }, sourcePost);
+  }}
   onOpenComments={handleOpenComments}
   onViewImage={setFullScreenImage}
   onVideoClick={handleVideoClick}

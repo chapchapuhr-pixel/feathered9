@@ -6111,7 +6111,7 @@ export const Post = memo(
 
     onReact: (post: PostType, type: ReactionType) => void;
 
-    onShare: (id: number, newShareCount: number) => void;
+    onShare: (id: number, newShareCount: number, data?: any, sourcePost?: any) => void;
 
     onDelete?: (id: number) => void;
 
@@ -6681,10 +6681,9 @@ export const Post = memo(
 
     const handleShareComplete = (destination: string, data?: any) => {
       const nextShares = safeNumber(data?.shares ?? data?.share_count, NaN);
-      if (data?.success && Number.isFinite(nextShares)) {
-        setShareCount(nextShares);
-        onShare(postId, nextShares);
-      }
+      const finalShares = Number.isFinite(nextShares) ? nextShares : shareCount + 1;
+      setShareCount(finalShares);
+      onShare(postId, finalShares, data, p);
       setShowShareSheet(false);
     };
 
@@ -6757,10 +6756,11 @@ export const Post = memo(
               reactionText={reactionText}
               onProfileClick={onProfileClick}
               onReact={(postItem, rType) => onReact(post, rType)}
-              onShare={(postId, newCount) => {
+              onShare={(postId, newCount, data, orig) => {
                 setShareCount(newCount);
-                onShare(postId, newCount);
+                onShare(postId, newCount, data, orig || p);
               }}
+              onShareClick={() => setShowShareSheet(true)}
               onVideoClick={() => onVideoClick(post)}
               onDelete={onDelete}
               onEdit={onEdit}
@@ -10263,7 +10263,7 @@ interface FeedProps {
 
   onReact: (post: PostType, type: ReactionType) => void;
 
-  onShare: (id: number, newShareCount: number) => void;
+  onShare: (id: number, newShareCount: number, data?: any, sourcePost?: any) => void;
 
   onOpenComments: (post: PostType) => void;
 
@@ -10652,7 +10652,7 @@ export const Feed = memo(({
                 reactionText={reelReactionText}
                 onProfileClick={(userId) => onProfileClick?.(Number(userId))}
                 onReact={(p, rType) => onReact?.(p, rType)}
-                onShare={(postId, newCount) => onShare?.(postId, newCount)}
+                onShare={(postId, newCount, data, orig) => onShare?.(postId, newCount, data, orig || reelAsPost)}
                 onVideoClick={() => {
                   if (onVideoClick) {
                     onVideoClick(reelAsPost);

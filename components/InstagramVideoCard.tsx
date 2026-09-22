@@ -61,7 +61,8 @@ interface InstagramVideoCardProps {
   onProfileClick: (userId: number) => void;
   onStoryClick?: (userId: number) => void;
   onReact?: (postOrId: any, type: any) => void;
-  onShare?: (postId: number, count: number) => void;
+  onShare?: (postId: number, count: number, data?: any, originalPost?: any) => void;
+  onShareClick?: (post: any) => void;
   onVideoClick?: (post: any) => void;
   onDelete?: (postId: number) => void;
   onEdit?: (postId: number, text: string) => void;
@@ -112,6 +113,7 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
   onStoryClick,
   onReact,
   onShare,
+  onShareClick,
   onVideoClick,
   onDelete,
   onEdit,
@@ -1006,10 +1008,17 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
   // ==========================================
   const handleShare = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
+
+    if (onShareClick) {
+      onShareClick(activePost);
+      return;
+    }
+
     const nextCount = sharesCount + 1;
     setSharesCount(nextCount);
 
     // Call standard post share endpoint: POST /api/posts/${postId}/share
+    let shareRes: any = null;
     try {
       const res = await apiFetch(`/api/posts/${activePostId}/share`, {
         method: 'POST',
@@ -1019,6 +1028,7 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
           post_id: activePostId,
         }),
       });
+      shareRes = res;
 
       if (res && (typeof res.shares === 'number' || typeof res.shares_count === 'number')) {
         setSharesCount(res.shares ?? res.shares_count);
@@ -1029,7 +1039,7 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
 
     if (onShare) {
       try {
-        onShare(activePostId, nextCount);
+        onShare(activePostId, nextCount, shareRes, activePost);
       } catch (err) {
         console.warn('onShare callback error:', err);
       }

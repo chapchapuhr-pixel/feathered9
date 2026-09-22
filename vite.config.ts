@@ -391,7 +391,7 @@ function apiDevPlugin(): Plugin {
           return req.on('end', () => {
             try {
               const parsed = JSON.parse(body || '{}');
-              const origPost = devPosts.find((p) => Number(p.id) === postId) || null;
+              const origPost = devPosts.find((p) => Number(p.id) === postId) || parsed.shared_post || parsed.post || null;
               const nextShares = (Number(origPost?.shares ?? origPost?.shares_count ?? 0) || 0) + 1;
               if (origPost) {
                 origPost.shares = nextShares;
@@ -402,6 +402,9 @@ function apiDevPlugin(): Plugin {
                 post_id: Date.now(),
                 user_id: parsed.user_id || 1,
                 content: parsed.message || parsed.content || '',
+                feeling: parsed.feeling || undefined,
+                location: parsed.location || undefined,
+                audience: parsed.audience || 'Public',
                 shared_post_id: postId,
                 shared_post: origPost,
                 created_at: new Date().toISOString(),
