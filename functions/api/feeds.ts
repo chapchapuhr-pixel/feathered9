@@ -35,6 +35,15 @@ const parseSeenIds = (raw: string | null, max = 250) => {
   return Array.from(new Set(ids)).slice(0, max);
 };
 
+const parseSeenKeys = (raw: string | null, max = 250) => {
+  if (!raw) return [];
+  const keys = raw
+    .split(",")
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+  return Array.from(new Set(keys)).slice(0, max);
+};
+
 // --------------------
 // Multi-media helpers
 // --------------------
@@ -268,6 +277,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const cursor = url.searchParams.get("cursor");
     const seed = toInt(url.searchParams.get("seed"), 1);
     const seen = parseSeenIds(url.searchParams.get("seen"), 250);
+    const seenKeys = parseSeenKeys(url.searchParams.get("seenKeys"), 250);
     const debug = url.searchParams.get("debug") === "1";
     const pinPostId = toInt(url.searchParams.get("pinPostId"), 0);
 
@@ -284,7 +294,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       `(p.visibility IS NULL OR p.visibility = 'public' OR p.visibility = '' OR p.visibility = 'Public')`
     );
 
-    // ✅ exclude deleted posts
     wherePosts.push(`COALESCE(p.is_deleted, 0) = 0`);
 
     wherePosts.push(`(p.content IS NULL OR (
@@ -295,7 +304,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       AND p.content NOT LIKE '%Check out my new event:%'
     ))`);
 
-    // Exclude any duplicate posts in posts table that match a seller's active product
     wherePosts.push(`NOT EXISTS (
       SELECT 1 FROM products pr_dup
       WHERE pr_dup.seller_id = p.user_id
@@ -341,7 +349,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         p.updated_at AS updated_at,
 
         p.id AS post_id,
-        p.shared_post_id AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -468,12 +475,200 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     `;
 
     // ============================================================
+    // 1b) POST SHARES (reshare cards)
+    // ============================================================
+    const whereShares: string[] = [];
+    const bindsShares: any[] = [];
+
+    whereShares.push(`ps.destination = 'feed'`);
+    whereShares.push(`COALESCE(p.is_deleted, 0) = 0`);
+    whereShares.push(`(
+      p.visibility IS NULL OR p.visibility = 'public' OR p.visibility = '' OR p.visibility = 'Public'
+    )`);
+
+    if (cursor && cursor.trim()) {
+      whereShares.push(`ps.created_at < ?`);
+      bindsShares.push(cursor.trim());
+    }
+    if (seen.length > 0) {
+      whereShares.push(`ps.post_id NOT IN (${seen.map(() => "?").join(",")})`);
+      bindsShares.push(...seen);
+    }
+    if (seenKeys.length > 0) {
+      whereShares.push(`('share:' || CAST(ps.id AS TEXT)) NOT IN (${seenKeys.map(() => "?").join(",")})`);
+      bindsShares.push(...seenKeys);
+    }
+
+    const whereSharesSql = whereShares.length ? `WHERE ${whereShares.join(" AND ")}` : "";
+
+    const baseSelectShares = `
+      SELECT
+        'share' AS source,
+        'share' AS item_type,
+
+        ps.id AS id,
+        ('share:' || CAST(ps.id AS TEXT)) AS feed_key,
+
+        ps.created_at AS created_at,
+        p.updated_at AS updated_at,
+
+        p.id AS post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        ps.user_id AS user_id,
+        ps.user_id AS owner_id,
+        'user_id' AS owner_field,
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        p.content AS content,
+        p.visibility AS visibility,
+        p.views AS views,
+        p.shares AS shares,
+
+        CASE
+          WHEN p.media_url LIKE 'data:%' THEN NULL
+          WHEN length(p.media_url) > 300 THEN NULL
+          ELSE p.media_url
+        END AS media_url,
+
+        CASE
+          WHEN p.media_url LIKE 'data:%' THEN NULL
+          WHEN length(p.media_url) > 300 THEN NULL
+          ELSE p.media_type
+        END AS media_type,
+
+        CASE
+          WHEN p.media_urls LIKE 'data:%' THEN NULL
+          WHEN length(p.media_urls) > 5000 THEN NULL
+          ELSE p.media_urls
+        END AS media_urls,
+
+        CASE
+          WHEN length(p.media_types) > 5000 THEN NULL
+          ELSE p.media_types
+        END AS media_types,
+
+        CASE
+          WHEN length(p.media_meta) > 100000 THEN NULL
+          ELSE p.media_meta
+        END AS media_meta,
+
+        (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id AND COALESCE(pc.is_deleted,0) = 0) AS comments_count,
+
+        (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) AS reactions_count,
+        (SELECT pr.type FROM post_reactions pr WHERE pr.post_id = p.id AND pr.user_id = ? LIMIT 1) AS my_reaction,
+
+        (
+          SELECT COALESCE(u2.name, u2.username, '')
+          FROM post_reactions pr2
+          JOIN users u2 ON u2.id = pr2.user_id
+          WHERE pr2.post_id = p.id
+          ORDER BY pr2.created_at DESC, pr2.id DESC
+          LIMIT 1
+        ) AS reactor_name,
+
+        (
+          SELECT json_group_array(
+            json_object(
+              'user_id', x.user_id,
+              'type', x.type,
+              'name', x.name,
+              'profile_image_url', x.profile_image_url
+            )
+          )
+          FROM (
+            SELECT
+              pr3.user_id AS user_id,
+              LOWER(COALESCE(pr3.type,'like')) AS type,
+              COALESCE(u3.name, u3.username, '') AS name,
+              CASE
+                WHEN u3.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u3.profile_image_url) > 300 THEN NULL
+                ELSE u3.profile_image_url
+              END AS profile_image_url
+            FROM post_reactions pr3
+            LEFT JOIN users u3 ON u3.id = pr3.user_id
+            WHERE pr3.post_id = p.id
+            ORDER BY pr3.created_at DESC, pr3.id DESC
+            LIMIT 30
+          ) x
+        ) AS reactions_preview,
+
+        (
+          SELECT json_group_array(
+            json_object('type', t.type, 'count', t.c)
+          )
+          FROM (
+            SELECT LOWER(COALESCE(type,'like')) AS type, COUNT(*) AS c
+            FROM post_reactions
+            WHERE post_id = p.id
+            GROUP BY LOWER(COALESCE(type,'like'))
+            ORDER BY c DESC
+          ) t
+        ) AS reactions_by_type,
+
+        NULL AS video_url, NULL AS caption, NULL AS song_name,
+        NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
+        NULL AS location, NULL AS sound_key, NULL AS sound_id,
+
+        NULL AS song_title, NULL AS song_artist_name, NULL AS song_album_name,
+        NULL AS song_cover_image_url, NULL AS song_duration_seconds,
+        NULL AS song_genre, NULL AS song_likes_count, NULL AS song_plays_count,
+
+        NULL AS event_date, NULL AS event_description,
+        NULL AS attending_count, NULL AS interested_count,
+        NULL AS my_rsvp_status,
+
+        'share' AS type,
+        'share' AS post_type,
+        'share' AS kind,
+
+        json_object(
+          'kind', 'share',
+          'type', 'share',
+          'share_id', ps.id,
+          'original_post_id', p.id,
+          'destination', ps.destination,
+          'message', ps.message,
+          'sharer', json_object(
+            'id', ps.user_id,
+            'name', COALESCE(su.name, su.username, ''),
+            'username', su.username,
+            'profile_image_url', su.profile_image_url
+          ),
+          'original_author', json_object(
+            'id', p.user_id,
+            'name', COALESCE(u.name, u.username, ''),
+            'username', u.username,
+            'profile_image_url', u.profile_image_url
+          )
+        ) AS meta,
+
+        NULL AS group_id, NULL AS group_name, NULL AS group_image
+      FROM post_shares ps
+      JOIN posts p ON p.id = ps.post_id
+      LEFT JOIN users su ON su.id = ps.user_id
+      LEFT JOIN users u ON u.id = p.user_id
+    `;
+
+    // ============================================================
     // 2) SONGS
     // ============================================================
     const whereSongs: string[] = [];
     const bindsSongs: any[] = [];
 
-    // ✅ exclude deleted songs
     whereSongs.push(`COALESCE(s.is_deleted, 0) = 0`);
 
     if (cursor && cursor.trim()) {
@@ -641,7 +836,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       `(e.visibility IS NULL OR e.visibility = 'worldwide' OR e.visibility = 'targeted')`
     );
 
-    // ✅ exclude deleted events
     whereEvents.push(`COALESCE(e.is_deleted, 0) = 0`);
 
     if (cursor && cursor.trim()) {
@@ -1376,6 +1570,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       ? freshPostsRes.results
       : [];
 
+    const freshSharesRes = await env.DB.prepare(
+      `${baseSelectShares} ${whereSharesSql} ORDER BY ps.created_at DESC LIMIT ?`
+    )
+      .bind(reactionUserId, ...bindsShares, freshCount)
+      .all();
+    const freshShares = Array.isArray(freshSharesRes?.results)
+      ? freshSharesRes.results
+      : [];
+
     const freshSongsRes = await env.DB.prepare(
       `${baseSelectSongs} ${whereSongsSql} ORDER BY s.created_at DESC LIMIT ?`
     )
@@ -1430,6 +1633,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     // RUN QUERIES (Explore)
     // ============================================================
     let explorePosts: any[] = [];
+    let exploreShares: any[] = [];
     let exploreSongs: any[] = [];
     let exploreEvents: any[] = [];
     let exploreGroupPosts: any[] = [];
@@ -1444,6 +1648,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         .bind(reactionUserId, ...bindsPosts, exploreCount)
         .all();
       explorePosts = Array.isArray(explorePostsRes?.results) ? explorePostsRes.results : [];
+
+      const exploreSharesRes = await env.DB.prepare(
+        `${baseSelectShares} ${whereSharesSql} ORDER BY RANDOM() LIMIT ?`
+      )
+        .bind(reactionUserId, ...bindsShares, exploreCount)
+        .all();
+      exploreShares = Array.isArray(exploreSharesRes?.results)
+        ? exploreSharesRes.results
+        : [];
 
       const exploreSongsRes = await env.DB.prepare(
         `${baseSelectSongs} ${whereSongsSql} ORDER BY RANDOM() LIMIT ?`
@@ -1508,12 +1721,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const map = new Map<string, any>();
     const allFeedRows = [
       ...freshPosts,
+      ...freshShares,
       ...freshSongs,
       ...freshEvents,
       ...freshGroupPosts,
       ...freshProductsFeed,
       ...freshAds,
       ...explorePosts,
+      ...exploreShares,
       ...exploreSongs,
       ...exploreEvents,
       ...exploreGroupPosts,
@@ -1569,59 +1784,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       comments_count: Number((item as any)?.comments_count ?? 0),
       reactions_count: Number((item as any)?.reactions_count ?? 0),
     }));
-
-    // Populate original post for shared posts
-    const sharedPostIds = Array.from(
-      new Set(
-        ordered
-          .map((it: any) => Number((it as any)?.shared_post_id))
-          .filter((id: number) => Boolean(id && !isNaN(id)))
-      )
-    );
-
-    if (sharedPostIds.length > 0) {
-      try {
-        const placeholders = sharedPostIds.map(() => '?').join(',');
-        const origPostsRes = await env.DB.prepare(`
-          SELECT 
-            p.*,
-            u.id as author_id,
-            u.name as author_name,
-            u.username as author_user_name,
-            u.profile_image_url as author_avatar,
-            u.is_verified as author_verified
-          FROM posts p
-          LEFT JOIN users u ON p.user_id = u.id
-          WHERE p.id IN (${placeholders})
-        `).bind(...sharedPostIds).all();
-
-        const origMap = new Map<number, any>();
-        if (Array.isArray(origPostsRes.results)) {
-          origPostsRes.results.forEach((row: any) => {
-            origMap.set(Number(row.id), {
-              ...row,
-              media_urls: parseJsonArrayUrls(row.media_urls),
-              author: {
-                id: row.author_id,
-                name: row.author_name || 'User',
-                user_name: row.author_user_name || '',
-                avatar_url: row.author_avatar || '',
-                avatar: row.author_avatar || '',
-                verified: Boolean(row.author_verified),
-              },
-            });
-          });
-        }
-
-        ordered.forEach((it: any) => {
-          if ((it as any)?.shared_post_id && origMap.has(Number((it as any).shared_post_id))) {
-            (it as any).shared_post = origMap.get(Number((it as any).shared_post_id));
-          }
-        });
-      } catch (err) {
-        console.error('Failed to populate shared_posts in feeds:', err);
-      }
-    }
 
     // ============================================================
     // Merge + dedup PRODUCTS
@@ -1698,10 +1860,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         debug: {
           pinPostId,
           seenCount: seen.length,
+          seenKeysCount: seenKeys.length,
           returnedFeed: ordered.length,
           returnedProducts: products.length,
           fresh: {
             posts: freshPosts.length,
+            shares: freshShares.length,
             songs: freshSongs.length,
             events: freshEvents.length,
             groupPosts: freshGroupPosts.length,
@@ -1711,6 +1875,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           },
           explore: {
             posts: explorePosts.length,
+            shares: exploreShares.length,
             songs: exploreSongs.length,
             events: exploreEvents.length,
             groupPosts: exploreGroupPosts.length,
