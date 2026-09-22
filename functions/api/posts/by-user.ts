@@ -6,7 +6,7 @@ type Env = { DB: D1Database };
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-user-id",
 };
 
 const json = (data: any, status = 200) =>
@@ -37,6 +37,16 @@ const normCreatedAt = (v: any) => {
 const sortDescByCreatedAt = (a: any, b: any) =>
   normCreatedAt(b.created_at).localeCompare(normCreatedAt(a.created_at));
 
+// Pick a display name from any row: prefers name, falls back to username,
+// then a generic placeholder. Never returns null/empty.
+const pickDisplayName = (name: any, username: any, fallback = "User") => {
+  const n = String(name ?? "").trim();
+  if (n) return n;
+  const u = String(username ?? "").trim();
+  if (u) return u;
+  return fallback;
+};
+
 // --------------------
 // Multi-media helpers
 // --------------------
@@ -61,10 +71,7 @@ const isHttpUrl = (v: any) => {
 
 const parseJsonArrayUrls = (raw: any, maxItems = 20): string[] => {
   if (Array.isArray(raw)) {
-    return raw
-      .map(cleanUrl)
-      .filter((x) => isHttpUrl(x))
-      .slice(0, maxItems);
+    return raw.map(cleanUrl).filter((x) => isHttpUrl(x)).slice(0, maxItems);
   }
 
   if (typeof raw === "string") {
@@ -76,10 +83,7 @@ const parseJsonArrayUrls = (raw: any, maxItems = 20): string[] => {
       try {
         const parsed = JSON.parse(s);
         if (Array.isArray(parsed)) {
-          return parsed
-            .map(cleanUrl)
-            .filter((x) => isHttpUrl(x))
-            .slice(0, maxItems);
+          return parsed.map(cleanUrl).filter((x) => isHttpUrl(x)).slice(0, maxItems);
         }
         return [];
       } catch {}
@@ -166,7 +170,7 @@ const parseMediaMeta = (raw: any, maxItems = 20) => {
   return arr
     .slice(0, maxItems)
     .map((m: any) => {
-      const thumb = cleanUrl(m?.thumb || m?.thumbnail_url);
+      const thumb = cleanUrl(m?.thumb || m?.thumbnail_url || m?.thumbnail);
       const feed = cleanUrl(m?.feed || m?.feed_url || m?.url || m?.full || m?.full_url);
       const full = cleanUrl(m?.full || m?.full_url || m?.feed || m?.feed_url || m?.url || m?.thumb);
       const type = String(m?.type || "").trim().toLowerCase();
@@ -240,6 +244,17 @@ const normalizeMedia = (row: any) => {
   };
 };
 
+const toBooleanVerified = (v: any) => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (!s || s === "0" || s === "false" || s === "null" || s === "undefined") return false;
+    return true;
+  }
+  return false;
+};
+
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
     if (!env.DB) {
@@ -266,6 +281,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     const perType = clamp(Math.ceil((limit + 1) * 1.5), 10, 80);
 
+    // ---------------- POSTS ----------------
     const qPosts = `
       SELECT
         'post' AS source,
@@ -273,9 +289,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         p.id AS id,
         ('post:' || CAST(p.id AS TEXT)) AS feed_key,
         p.created_at AS created_at,
+        p.updated_at AS updated_at,
 
         p.id AS post_id,
-        p.shared_post_id AS shared_post_id,
+        NULL AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -283,6 +300,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS product_id2,
 
         p.user_id AS user_id,
+        p.user_id AS owner_id,
+        'user_id' AS owner_field,
         COALESCE(NULLIF(TRIM(u.username), ''), 'user') AS username,
         COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.username), ''), 'User') AS name,
 
@@ -291,6 +310,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
 
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
@@ -329,7 +354,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           ELSE p.media_meta
         END AS media_meta,
 
-        (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id) AS comments_count,
+        (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id AND COALESCE(pc.is_deleted, 0) = 0) AS comments_count,
         (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) AS reactions_count,
         (SELECT pr.type FROM post_reactions pr WHERE pr.post_id = p.id AND pr.user_id = ? LIMIT 1) AS my_reaction,
 
@@ -404,6 +429,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS kind,
         NULL AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id,
         NULL AS group_name,
         NULL AS group_image
@@ -447,6 +474,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
+    // ---------------- SHARES ----------------
     const qShares = `
       SELECT
         'share' AS source,
@@ -454,6 +482,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ps.id AS id,
         ('share:' || CAST(ps.id AS TEXT)) AS feed_key,
         ps.created_at AS created_at,
+        p.updated_at AS updated_at,
 
         p.id AS post_id,
         p.id AS shared_post_id,
@@ -464,6 +493,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS product_id2,
 
         ps.user_id AS user_id,
+        ps.user_id AS owner_id,
+        'user_id' AS owner_field,
         COALESCE(NULLIF(TRIM(su.username), ''), 'user') AS username,
         COALESCE(NULLIF(TRIM(su.name), ''), NULLIF(TRIM(su.username), ''), 'User') AS name,
 
@@ -472,6 +503,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(su.profile_image_url) > 300 THEN NULL
           ELSE su.profile_image_url
         END AS profile_image_url,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
 
         COALESCE(su.is_verified, 0) AS is_verified,
         COALESCE(su.role, 'user') AS role,
@@ -568,8 +605,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'original_post_id', p.id,
           'destination', ps.destination,
           'message', ps.message,
-          'description', ps.message
+          'description', ps.message,
+          'sharer', json_object(
+            'id', ps.user_id,
+            'name', COALESCE(NULLIF(TRIM(su.name), ''), NULLIF(TRIM(su.username), ''), ''),
+            'username', su.username,
+            'profile_image_url', su.profile_image_url
+          ),
+          'original_author', json_object(
+            'id', p.user_id,
+            'name', COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.username), ''), ''),
+            'username', u.username,
+            'profile_image_url', u.profile_image_url
+          )
         ) AS meta,
+
+        NULL AS shared_post,
 
         NULL AS group_id,
         NULL AS group_name,
@@ -578,7 +629,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       FROM post_shares ps
       JOIN posts p ON p.id = ps.post_id
       LEFT JOIN users su ON su.id = ps.user_id
+      LEFT JOIN users u ON u.id = p.user_id
       WHERE ps.user_id = ?
+        AND ps.destination = 'feed'
         AND COALESCE(p.is_deleted, 0) = 0
         AND (p.visibility IS NULL OR p.visibility = 'public' OR p.visibility = '' OR p.visibility = 'Public')
         ${cursor ? `AND ps.created_at < ?` : ""}
@@ -586,6 +639,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
+    // ---------------- SONGS ----------------
     const qSongs = `
       SELECT
         'song' AS source,
@@ -593,8 +647,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         s.id AS id,
         ('song:' || CAST(s.id AS TEXT)) AS feed_key,
         s.created_at AS created_at,
+        NULL AS updated_at,
 
         NULL AS post_id,
+        NULL AS shared_post_id,
         NULL AS reel_id,
         s.id AS song_id2,
         NULL AS event_id,
@@ -602,6 +658,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS product_id2,
 
         s.uploader_id AS user_id,
+        s.uploader_id AS owner_id,
+        'uploader_id' AS owner_field,
         COALESCE(NULLIF(TRIM(u.username), ''), 'user') AS username,
         COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.username), ''), 'User') AS name,
 
@@ -610,6 +668,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
 
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
@@ -641,8 +705,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS media_meta,
         0 AS comments_count,
 
-        (SELECT COUNT(*) FROM song_likes sl WHERE sl.song_id = s.id) AS reactions_count,
-        (SELECT 'like' FROM song_likes sl WHERE sl.song_id = s.id AND sl.user_id = ? LIMIT 1) AS my_reaction,
+        (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id) AS reactions_count,
+        (SELECT sr.type FROM song_reactions sr WHERE sr.song_id = s.id AND sr.user_id = ? LIMIT 1) AS my_reaction,
 
         NULL AS reactor_name,
         NULL AS reactions_preview,
@@ -665,7 +729,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         s.duration_seconds AS song_duration_seconds,
         s.genre AS song_genre,
 
-        (SELECT COUNT(*) FROM song_likes sl WHERE sl.song_id = s.id) AS song_likes_count,
+        (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id) AS song_likes_count,
         (
           (SELECT COUNT(*) FROM song_play_events spe WHERE spe.song_id = s.id)
           +
@@ -677,6 +741,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS kind,
         NULL AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id,
         NULL AS group_name,
         NULL AS group_image
@@ -684,11 +750,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       FROM songs s
       LEFT JOIN users u ON u.id = s.uploader_id
       WHERE s.uploader_id = ?
-      ${cursor ? `AND s.created_at < ?` : ""}
+        AND COALESCE(s.is_deleted, 0) = 0
+        ${cursor ? `AND s.created_at < ?` : ""}
       ORDER BY s.created_at DESC
       LIMIT ?
     `;
 
+    // ---------------- PRODUCTS ----------------
     const qProducts = `
       SELECT
         'product' AS source,
@@ -696,8 +764,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         pr.id AS id,
         ('product:' || CAST(pr.id AS TEXT)) AS feed_key,
         pr.created_at AS created_at,
+        NULL AS updated_at,
 
         NULL AS post_id,
+        NULL AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -705,6 +775,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         pr.id AS product_id2,
 
         pr.seller_id AS user_id,
+        pr.seller_id AS owner_id,
+        'seller_id' AS owner_field,
         COALESCE(NULLIF(TRIM(u.username), ''), 'seller') AS username,
         COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.username), ''), 'Seller') AS name,
 
@@ -713,6 +785,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           WHEN length(u.profile_image_url) > 300 THEN NULL
           ELSE u.profile_image_url
         END AS profile_image_url,
+
+        CASE
+          WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(u.profile_image_url) > 300 THEN NULL
+          ELSE u.profile_image_url
+        END AS avatar_url,
 
         COALESCE(u.is_verified, 0) AS is_verified,
         COALESCE(u.role, 'user') AS role,
@@ -765,6 +843,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'marketplace', json_object('id', pr.id)
         ) AS meta,
 
+        NULL AS shared_post,
+
         NULL AS group_id,
         NULL AS group_name,
         NULL AS group_image
@@ -772,16 +852,21 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       FROM products pr
       LEFT JOIN users u ON u.id = pr.seller_id
       WHERE pr.seller_id = ?
-      ${cursor ? `AND pr.created_at < ?` : ""}
+        AND COALESCE(pr.is_deleted, 0) = 0
+        ${cursor ? `AND pr.created_at < ?` : ""}
       ORDER BY pr.created_at DESC
       LIMIT ?
     `;
 
-    const bindCursor = (base: any[]) => (cursor ? [...base, cursor, perType] : [...base, perType]);
+    const bindCursor = (base: any[]) =>
+      cursor ? [...base, cursor, perType] : [...base, perType];
 
     const runShares = async () => {
       try {
-        const res = await env.DB.prepare(qShares).bind(...bindCursor([viewerId || 0, userId])).all();
+        const res = await env.DB
+          .prepare(qShares)
+          .bind(...bindCursor([viewerId || 0, userId]))
+          .all();
         return Array.isArray(res?.results) ? res.results : [];
       } catch (err) {
         console.warn("by-user qShares query fallback:", err);
@@ -817,19 +902,26 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const merged = mergedPlusOne.slice(0, limit);
 
     const normalized = merged.map((item: any) => {
-      const isVerified = Boolean(
-        item?.is_verified &&
-        item?.is_verified !== 0 &&
-        item?.is_verified !== "0" &&
-        item?.is_verified !== false
-      );
+      const isVerified = toBooleanVerified(item?.is_verified);
 
       const authorObj = {
         id: item?.user_id || item?.author?.id,
-        name: item?.name || item?.author?.name || item?.username || "User",
+        name: pickDisplayName(
+          item?.name || item?.author?.name,
+          item?.username || item?.author?.username,
+          "User"
+        ),
         username: item?.username || item?.author?.username || "",
-        avatar_url: item?.avatar_url || item?.profile_image_url || item?.author?.profile_image_url || "",
-        profile_image_url: item?.profile_image_url || item?.avatar_url || item?.author?.profile_image_url || "",
+        avatar_url:
+          item?.avatar_url ||
+          item?.profile_image_url ||
+          item?.author?.profile_image_url ||
+          "",
+        profile_image_url:
+          item?.profile_image_url ||
+          item?.avatar_url ||
+          item?.author?.profile_image_url ||
+          "",
         is_verified: isVerified,
         verified: isVerified,
         role: item?.role || item?.author?.role || "user",
@@ -848,7 +940,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       };
     });
 
-    // Populate original post for shared posts
+    // --------------------------------
+    // Populate `shared_post` for shares
+    // --------------------------------
     const sharedPostIds = Array.from(
       new Set(
         normalized
@@ -859,55 +953,60 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     if (sharedPostIds.length > 0) {
       try {
-        const placeholders = sharedPostIds.map(() => '?').join(',');
-        const origPostsRes = await env.DB.prepare(`
-          SELECT 
-            p.*,
-            u.id as author_id,
-            u.name as author_name,
-            u.username as author_user_name,
-            u.profile_image_url as author_avatar,
-            u.is_verified as author_verified,
-            u.role as author_role
-          FROM posts p
-          LEFT JOIN users u ON p.user_id = u.id
-          WHERE p.id IN (${placeholders})
-        `).bind(...sharedPostIds).all();
+        const placeholders = sharedPostIds.map(() => "?").join(",");
+        const origPostsRes = await env.DB
+          .prepare(`
+            SELECT
+              p.*,
+              u.id                 AS author_id,
+              u.name               AS author_name,
+              u.username           AS author_user_name,
+              u.profile_image_url  AS author_avatar,
+              u.is_verified        AS author_verified,
+              u.role               AS author_role
+            FROM posts p
+            LEFT JOIN users u ON p.user_id = u.id
+            WHERE p.id IN (${placeholders})
+          `)
+          .bind(...sharedPostIds)
+          .all();
 
         const origMap = new Map<number, any>();
+
         if (Array.isArray(origPostsRes.results)) {
           origPostsRes.results.forEach((row: any) => {
             const rawUrls = row.media_urls
-              ? (typeof row.media_urls === 'string' ? JSON.parse(row.media_urls) : row.media_urls)
+              ? typeof row.media_urls === "string"
+                ? JSON.parse(row.media_urls)
+                : row.media_urls
               : [];
             const parsedUrls = Array.isArray(rawUrls) ? rawUrls : [];
-            const finalMediaUrls = parsedUrls.length > 0
-              ? parsedUrls
-              : (row.media_url ? [row.media_url] : []);
+            const finalMediaUrls =
+              parsedUrls.length > 0
+                ? parsedUrls
+                : row.media_url
+                ? [row.media_url]
+                : [];
 
-            const isOrigVerified = Boolean(
-              row.author_verified &&
-              row.author_verified !== 0 &&
-              row.author_verified !== "0" &&
-              row.author_verified !== false
-            );
+            const isOrigVerified = toBooleanVerified(row.author_verified);
 
             const origAuthor = {
               id: row.author_id,
-              name: row.author_name || 'User',
-              username: row.author_user_name || '',
-              user_name: row.author_user_name || '',
-              avatar_url: row.author_avatar || '',
-              avatar: row.author_avatar || '',
-              profile_image_url: row.author_avatar || '',
-              verified: isOrigVerified,
+              // ✅ FIX: prefer name, fall back to username, then to "User"
+              name: pickDisplayName(row.author_name, row.author_user_name, "User"),
+              username: row.author_user_name || "",
+              user_name: row.author_user_name || "",
+              avatar_url: row.author_avatar || "",
+              avatar: row.author_avatar || "",
+              profile_image_url: row.author_avatar || "",
               is_verified: isOrigVerified,
-              role: row.author_role || 'user',
+              verified: isOrigVerified,
+              role: row.author_role || "user",
             };
 
             origMap.set(Number(row.id), {
               ...row,
-              description: row.description || row.content || '',
+              description: row.description || row.content || "",
               media_urls: finalMediaUrls,
               images: finalMediaUrls,
               is_verified: isOrigVerified,
@@ -924,18 +1023,20 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             it.shared_post = {
               ...sp,
               ...normalizeMedia(sp),
-              description: sp.description || sp.content || '',
+              description: sp.description || sp.content || "",
             };
           }
         });
       } catch (err) {
-        console.error('Failed to populate shared_posts in by-user:', err);
+        console.error("Failed to populate shared_posts in by-user:", err);
       }
     }
 
     const oldest = normalized.reduce((acc: any, cur: any) => {
       if (!acc) return cur;
-      return normCreatedAt(cur.created_at) < normCreatedAt(acc.created_at) ? cur : acc;
+      return normCreatedAt(cur.created_at) < normCreatedAt(acc.created_at)
+        ? cur
+        : acc;
     }, null);
 
     const nextCursor = oldest?.created_at ?? null;
