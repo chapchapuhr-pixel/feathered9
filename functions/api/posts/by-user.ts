@@ -37,14 +37,24 @@ const normCreatedAt = (v: any) => {
 const sortDescByCreatedAt = (a: any, b: any) =>
   normCreatedAt(b.created_at).localeCompare(normCreatedAt(a.created_at));
 
-// Pick a display name from any row: prefers name, falls back to username,
-// then a generic placeholder. Never returns null/empty.
 const pickDisplayName = (name: any, username: any, fallback = "User") => {
   const n = String(name ?? "").trim();
   if (n) return n;
   const u = String(username ?? "").trim();
   if (u) return u;
   return fallback;
+};
+
+const toBooleanVerified = (v: any) => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (!s || s === "0" || s === "false" || s === "null" || s === "undefined")
+      return false;
+    return true;
+  }
+  return false;
 };
 
 // --------------------
@@ -213,7 +223,9 @@ const normalizeMedia = (row: any) => {
 
   const single = cleanUrl(row?.media_url);
   const urls = parseJsonArrayUrls(row?.media_urls);
-  const outUrls = urls.length ? urls : single ? [single] : [];
+  const rawImages = parseJsonArrayUrls(row?.images);
+  const combinedUrls = urls.length ? urls : rawImages;
+  const outUrls = combinedUrls.length ? combinedUrls : single ? [single] : [];
 
   const types = parseJsonArrayStrings(row?.media_types);
   let outTypes = types.length ? types : [];
@@ -242,17 +254,6 @@ const normalizeMedia = (row: any) => {
     feed_url: media[0]?.feed || null,
     full_url: media[0]?.full || null,
   };
-};
-
-const toBooleanVerified = (v: any) => {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  if (typeof v === "string") {
-    const s = v.trim().toLowerCase();
-    if (!s || s === "0" || s === "false" || s === "null" || s === "undefined") return false;
-    return true;
-  }
-  return false;
 };
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
@@ -474,7 +475,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
-    // ---------------- SHARES ----------------
+    // ---------------- POST SHARES ----------------
     const qShares = `
       SELECT
         'share' AS source,
@@ -937,6 +938,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS event_id,
         NULL AS group_post_id,
         pr.id AS product_id2,
+        pr.id AS product_id,
 
         pr.seller_id AS user_id,
         pr.seller_id AS owner_id,
@@ -962,9 +964,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         pr.title AS content,
         'public' AS visibility,
         0 AS views,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS shares,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS shares_count,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS share_count,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS shares,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS shares_count,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS share_count,
 
         NULL AS media_url,
         NULL AS media_type,
@@ -1053,13 +1055,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     };
 
-    const [postsRes, sharesResults, productSharesResults, songsRes, productsRes] = await Promise.all([
-      env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
-      runShares(),
-      runProductShares(),
-      env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
-      env.DB.prepare(qProducts).bind(...bindCursor([userId])).all(),
-    ]);
+    const [postsRes, sharesResults, productSharesResults, songsRes, productsRes] =
+      await Promise.all([
+        env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
+        runShares(),
+        runProductShares(),
+        env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
+        env.DB.prepare(qProducts).bind(...bindCursor([userId])).all(),
+      ]);
 
     const items = [
       ...(Array.isArray(postsRes.results) ? postsRes.results : []),
@@ -1071,7 +1074,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     const map = new Map<string, any>();
     for (const it of items) {
-      const k = safeStr(it?.feed_key) || `${safeStr(it?.source)}:${Number(it?.id)}`;
+      const k =
+        safeStr(it?.feed_key) || `${safeStr(it?.source)}:${Number(it?.id)}`;
       if (!map.has(k)) map.set(k, it);
     }
 
@@ -1082,6 +1086,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const hasMore = mergedPlusOne.length > limit;
     const merged = mergedPlusOne.slice(0, limit);
 
+    // ============================================================
+    // Normalize every item + add edit/delete flags
+    // ============================================================
     const normalized = merged.map((item: any) => {
       const isVerified = toBooleanVerified(item?.is_verified);
 
@@ -1108,6 +1115,55 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         role: item?.role || item?.author?.role || "user",
       };
 
+      const source = String(item?.source || "");
+      const isShare = source === "share" || source === "product_share";
+
+      const ownerId =
+        Number(
+          item?.owner_id ??
+            item?.user_id ??
+            item?.seller_id ??
+            item?.uploader_id ??
+            0
+        ) || 0;
+
+      const editableId =
+        Number(
+          item?.post_id ??
+            item?.product_id ??
+            item?.song_id2 ??
+            item?.event_id ??
+            item?.group_post_id ??
+            item?.id ??
+            0
+        ) || 0;
+
+      const viewerOwnsRow = Boolean(viewerId > 0 && viewerId === ownerId);
+
+      const sharedOwnerId = isShare
+        ? Number(
+            item?.shared_post?.user_id ??
+              item?.shared_product?.seller_id ??
+              item?.shared_product?.user_id ??
+              0
+          ) || 0
+        : 0;
+
+      const viewerOwnsShared =
+        viewerId > 0 && sharedOwnerId > 0 && viewerId === sharedOwnerId;
+
+      const canEdit =
+        !isShare &&
+        viewerOwnsRow &&
+        (source === "post" || source === "product");
+
+      const canDelete =
+        !isShare &&
+        viewerOwnsRow &&
+        (source === "post" ||
+          source === "product" ||
+          source === "song");
+
       return {
         ...item,
         ...normalizeMedia(item),
@@ -1118,15 +1174,27 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         user: authorObj,
         comments_count: Number(item?.comments_count ?? 0),
         reactions_count: Number(item?.reactions_count ?? 0),
+
+        // ✅ ownership + permission flags
+        owner_id: ownerId,
+        editable_id: editableId,
+        shared_owner_id: isShare ? sharedOwnerId : null,
+        is_share: isShare,
+
+        can_edit: canEdit,
+        can_edit_shared: isShare && viewerOwnsShared && !!sharedOwnerId,
+        can_delete: canDelete,
+        can_delete_shared: isShare && viewerOwnsShared && !!sharedOwnerId,
       };
     });
 
-    // --------------------------------
-    // Populate `shared_post` for shares
-    // --------------------------------
+    // ============================================================
+    // Populate `shared_post` for post shares
+    // ============================================================
     const sharedPostIds = Array.from(
       new Set(
         normalized
+          .filter((it: any) => it?.source === "share")
           .map((it: any) => Number(it?.shared_post_id))
           .filter((id: number) => Boolean(id && !isNaN(id)))
       )
@@ -1173,7 +1241,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
             const origAuthor = {
               id: row.author_id,
-              // ✅ FIX: prefer name, fall back to username, then to "User"
               name: pickDisplayName(row.author_name, row.author_user_name, "User"),
               username: row.author_user_name || "",
               user_name: row.author_user_name || "",
@@ -1199,13 +1266,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         }
 
         normalized.forEach((it: any) => {
-          if (it?.shared_post_id && origMap.has(Number(it.shared_post_id))) {
+          if (it?.source === "share" && it?.shared_post_id) {
             const sp = origMap.get(Number(it.shared_post_id));
-            it.shared_post = {
-              ...sp,
-              ...normalizeMedia(sp),
-              description: sp.description || sp.content || "",
-            };
+            if (sp) {
+              it.shared_post = {
+                ...sp,
+                ...normalizeMedia(sp),
+                description: sp.description || sp.content || "",
+              };
+            }
           }
         });
       } catch (err) {
@@ -1213,6 +1282,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     }
 
+    // ============================================================
+    // Normalize inline `shared_product` (products, not from follow-up)
+    // ============================================================
     normalized.forEach((it: any) => {
       if (it?.shared_product) {
         let sp: any = it.shared_product;
@@ -1224,18 +1296,30 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           }
         }
         if (sp && typeof sp === "object") {
-          const spVerified = toBooleanVerified(sp.author?.is_verified ?? sp.is_verified);
+          const spVerified = toBooleanVerified(
+            sp.author?.is_verified ?? sp.is_verified
+          );
+
           const spAuthor = {
             id: sp.seller_id || sp.user_id || sp.author?.id,
-            name: pickDisplayName(sp.author?.name, sp.author?.username, "Seller"),
+            name: pickDisplayName(
+              sp.author?.name,
+              sp.author?.username,
+              "Seller"
+            ),
             username: sp.author?.username || "",
-            avatar_url: sp.author?.avatar_url || sp.author?.profile_image_url || "",
-            profile_image_url: sp.author?.profile_image_url || sp.author?.avatar_url || "",
+            avatar_url:
+              sp.author?.avatar_url || sp.author?.profile_image_url || "",
+            profile_image_url:
+              sp.author?.profile_image_url || sp.author?.avatar_url || "",
             is_verified: spVerified,
             verified: spVerified,
             role: sp.author?.role || "user",
           };
-          const rawImgs = parseMediaList(sp.images || sp.media_urls);
+
+          // ✅ FIX: was `parseMediaList` (undefined) — now `parseJsonArrayUrls`
+          const rawImgs = parseJsonArrayUrls(sp.images || sp.media_urls);
+
           const pNorm = {
             ...sp,
             id: Number(sp.id || sp.product_id || 0),
@@ -1264,6 +1348,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             kind: "product",
             is_product: true,
           };
+
           it.shared_product = pNorm;
           if (!it.shared_post) it.shared_post = pNorm;
           if (!it.shared_post_id) it.shared_post_id = pNorm.id;
