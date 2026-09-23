@@ -6328,17 +6328,25 @@ export const Post = memo(
     ]);
 
     const isMarketplace =
-      p?.type === 'marketplace' ||
-      p?.post_type === 'product' ||
-      p?.type === 'product' ||
-      p?.kind === 'product' ||
-      p?.item_type === 'product' ||
-      p?.source === 'product' ||
-      String(p?.feed_key || '').startsWith('product:') ||
-      meta?.type === 'product' ||
-      meta?.kind === 'product' ||
-      !!p?.product_id ||
-      !!p?.meta?.marketplace?.id;
+      p?.item_type !== 'product_share' &&
+      p?.source !== 'product_share' &&
+      p?.post_type !== 'product_share' &&
+      p?.type !== 'share' &&
+      !p?.shared_product &&
+      !p?.shared_post &&
+      (
+        p?.type === 'marketplace' ||
+        p?.post_type === 'product' ||
+        p?.type === 'product' ||
+        p?.kind === 'product' ||
+        p?.item_type === 'product' ||
+        p?.source === 'product' ||
+        String(p?.feed_key || '').startsWith('product:') ||
+        meta?.type === 'product' ||
+        meta?.kind === 'product' ||
+        !!p?.product_id ||
+        !!p?.meta?.marketplace?.id
+      );
 
     const isEventPost =
       p?.item_type === 'event' ||
@@ -6472,11 +6480,14 @@ export const Post = memo(
     const isSharedPost = Boolean(
       p.shared_post ||
       p.shared_product ||
-      p.shared_post_id ||
-      p.product_id ||
+      (p.shared_post_id && p.item_type !== 'product' && p.source !== 'product') ||
       p.item_type === 'product_share' ||
       p.source === 'product_share' ||
-      p.post_type === 'product_share'
+      p.post_type === 'product_share' ||
+      p.item_type === 'share' ||
+      p.source === 'share' ||
+      p.type === 'share' ||
+      p.post_type === 'share'
     );
     const originalPost =
       p.shared_product ||
@@ -7226,36 +7237,7 @@ export const Post = memo(
                       </div>
                     )}
                   </>
-                ) : isSharedProduct || targetSharedProductId || p.product_id ? (
-                  <div className="p-4 flex items-center justify-between bg-[#0F172A]/50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
-                        <i className="fas fa-store text-lg"></i>
-                      </div>
-                      <div>
-                        <div className="text-[17px] font-bold text-[#F8FAFC]">Marketplace Product</div>
-                        <div className="text-[13px] text-[#94A3B8]">
-                          Product #{targetSharedProductId || p.product_id}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const pid = targetSharedProductId || Number(p.product_id);
-                        if (pid) {
-                          if (onViewProduct) onViewProduct(pid);
-                          else if (onViewProductFromPost) onViewProductFromPost(pid);
-                        }
-                      }}
-                      className="bg-[#1877F2] text-white px-4 py-1.5 rounded-full text-[14px] font-bold hover:bg-[#166FE5] flex items-center gap-1.5"
-                    >
-                      <i className="fas fa-shopping-bag text-xs" />
-                      <span>View product</span>
-                    </button>
-                  </div>
-                ) : (
+                ) : p.shared_post_id ? (
                   <div className="p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
@@ -7275,7 +7257,7 @@ export const Post = memo(
                       View Post
                     </button>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
 
