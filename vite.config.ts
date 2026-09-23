@@ -480,6 +480,122 @@ function apiDevPlugin(): Plugin {
           });
         }
 
+        if ((pathname.startsWith('/api/products/') && pathname.endsWith('/share')) || pathname === '/api/products/share') {
+          const parts = pathname.split('/');
+          const productId = Number(parts[3] || 0);
+          res.statusCode = 200;
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          return req.on('end', () => {
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const targetProductId = productId || Number(parsed.product_id || parsed.id || 1);
+              const origProduct = parsed.shared_product || parsed.product || {
+                id: targetProductId,
+                product_id: targetProductId,
+                title: 'Featured Product',
+                content: 'Top quality product available on marketplace',
+                description: 'Top quality product available on marketplace',
+                price: 75000,
+                main_price: 75000,
+                currency: 'TZS',
+                location: 'Dar es Salaam',
+                images: ['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop&q=80'],
+                media_urls: ['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop&q=80'],
+                author: {
+                  id: 2,
+                  name: 'Official Store',
+                  username: 'officialstore',
+                  avatar_url: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
+                  profile_image_url: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
+                  is_verified: true,
+                  verified: true,
+                },
+                user: {
+                  id: 2,
+                  name: 'Official Store',
+                  username: 'officialstore',
+                  avatar_url: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
+                  profile_image_url: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
+                  is_verified: true,
+                  verified: true,
+                },
+                is_product: true,
+                item_type: 'product',
+                type: 'product',
+                kind: 'product',
+              };
+
+              const newSharedProductPost = {
+                id: Date.now(),
+                post_id: Date.now(),
+                product_id: targetProductId,
+                user_id: parsed.user_id || 1,
+                content: parsed.message || parsed.content || '',
+                description: parsed.message || parsed.content || '',
+                message: parsed.message || parsed.content || '',
+                source: 'share',
+                item_type: 'product_share',
+                type: 'share',
+                post_type: 'product_share',
+                shared_post_id: targetProductId,
+                shared_product: origProduct,
+                shared_post: origProduct,
+                is_verified: false,
+                verified: false,
+                author: {
+                  id: parsed.user_id || 1,
+                  name: 'You',
+                  username: 'you',
+                  is_verified: false,
+                  verified: false,
+                },
+                user: {
+                  id: parsed.user_id || 1,
+                  name: 'You',
+                  username: 'you',
+                  is_verified: false,
+                  verified: false,
+                },
+                created_at: new Date().toISOString(),
+                shares: 1,
+                shares_count: 1,
+                likes_count: 0,
+                reactions_count: 0,
+                comments_count: 0,
+              };
+
+              const shareRecord = {
+                id: Date.now(),
+                product_id: targetProductId,
+                user_id: parsed.user_id || 1,
+                destination: parsed.destination || 'feed',
+                message: parsed.message || parsed.content || '',
+                created_at: new Date().toISOString(),
+              };
+              devShares.unshift(shareRecord);
+
+              if (parsed.destination === 'feed' || parsed.destination === 'profile') {
+                devPosts.unshift(newSharedProductPost);
+              }
+
+              return res.end(JSON.stringify({
+                success: true,
+                share_id: shareRecord.id,
+                product_id: targetProductId,
+                shares: 1,
+                shares_count: 1,
+                post: newSharedProductPost,
+                shared_post: origProduct,
+                shared_product: origProduct,
+              }));
+            } catch {
+              return res.end(JSON.stringify({ success: true, shares: 1, shares_count: 1 }));
+            }
+          });
+        }
+
+
         // Single Post Fetch: GET /api/posts/:id
         if (req.method === 'GET' && /^\/api\/posts\/\d+$/.test(pathname)) {
           const postId = Number(pathname.split('/')[3] || 0);

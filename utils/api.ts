@@ -209,3 +209,33 @@ export async function sharePost(
 
   return res.json();
 }
+
+/**
+ * Share a product to feed, story, message, copy_link, group, or external. Calls POST /api/products/:id/share.
+ */
+export async function shareProduct(
+  productId: number,
+  userId: number,
+  destination: "feed" | "story" | "message" | "copy_link" | "group" | "external" = "feed",
+  message?: string
+) {
+  const targetUrl = resolveApiUrl(`/api/products/${productId}/share`);
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('unera_token') : null;
+  const res = await fetch(targetUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "x-user-id": String(userId),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      destination,
+      ...(message ? { message } : {}),
+    }),
+  });
+
+  return res.json();
+}
+

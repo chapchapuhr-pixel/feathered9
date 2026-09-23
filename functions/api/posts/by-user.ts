@@ -639,6 +639,170 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
+    // ---------------- PRODUCT SHARES ----------------
+    const qProductShares = `
+      SELECT
+        'product_share' AS source,
+        'product_share' AS item_type,
+        psh.id AS id,
+        ('product_share:' || CAST(psh.id AS TEXT)) AS feed_key,
+        psh.shared_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        pr.id AS shared_post_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        pr.id AS product_id2,
+        pr.id AS product_id,
+
+        psh.user_id AS user_id,
+        psh.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(su.name, su.username, 'User') AS name,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(psh.message, '') AS content,
+        COALESCE(psh.message, '') AS description,
+        COALESCE(psh.message, '') AS message,
+        'public' AS visibility,
+        0 AS views, 0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        pr.images AS media_urls,
+        NULL AS media_types,
+        pr.image_variants AS media_meta,
+
+        (SELECT COUNT(*) FROM product_comments pc WHERE pc.product_id = pr.id AND COALESCE(pc.is_deleted, 0) = 0) AS comments_count,
+        (SELECT COUNT(*) FROM product_reactions prr WHERE prr.product_id = pr.id) AS reactions_count,
+        (SELECT prr.type FROM product_reactions prr WHERE prr.product_id = pr.id AND prr.user_id = ? LIMIT 1) AS my_reaction,
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url, NULL AS caption, NULL AS song_name,
+        NULL AS audio_url, 0 AS audio_start, 0 AS audio_end,
+        NULL AS location, NULL AS sound_key, NULL AS sound_id,
+
+        NULL AS song_title, NULL AS song_artist_name, NULL AS song_album_name,
+        NULL AS song_cover_image_url, NULL AS song_duration_seconds,
+        NULL AS song_genre, NULL AS song_likes_count, NULL AS song_plays_count,
+
+        'product_share' AS type,
+        'product_share' AS post_type,
+        'product_share' AS kind,
+        json_object(
+          'kind', 'product_share',
+          'type', 'product_share',
+          'share_id', psh.id,
+          'original_product_id', pr.id,
+          'destination', psh.destination,
+          'message', psh.message
+        ) AS meta,
+
+        json_object(
+          'id', pr.id,
+          'product_id', pr.id,
+          'seller_id', pr.seller_id,
+          'user_id', pr.seller_id,
+          'title', pr.title,
+          'name', pr.title,
+          'category', pr.category,
+          'description', pr.description,
+          'content', pr.description,
+          'country', pr.country,
+          'address', pr.address,
+          'location', pr.address,
+          'main_price', pr.main_price,
+          'discount_price', pr.discount_price,
+          'price', COALESCE(pr.discount_price, pr.main_price),
+          'currency', 'TZS',
+          'quantity', pr.quantity,
+          'phone_number', pr.phone_number,
+          'images', pr.images,
+          'media_urls', pr.images,
+          'image_variants', pr.image_variants,
+          'thumbnail_url', pr.thumbnail_url,
+          'created_at', pr.created_at,
+          'item_type', 'product',
+          'source', 'product',
+          'type', 'product',
+          'post_type', 'product',
+          'kind', 'product',
+          'is_product', json('true'),
+          'author', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, 'Seller'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+          'user', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, 'Seller'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_product,
+
+        NULL AS group_id,
+        NULL AS group_name,
+        NULL AS group_image
+
+      FROM product_shares psh
+      JOIN products pr ON pr.id = psh.product_id
+      LEFT JOIN users su ON su.id = psh.user_id
+      LEFT JOIN users u ON u.id = pr.seller_id
+      WHERE psh.user_id = ?
+        AND (psh.destination = 'feed' OR psh.destination = 'profile' OR psh.destination IS NULL OR psh.destination = '')
+        AND COALESCE(pr.is_deleted, 0) = 0
+        ${cursor ? `AND psh.shared_at < ?` : ""}
+      ORDER BY psh.shared_at DESC
+      LIMIT ?
+    `;
+
     // ---------------- SONGS ----------------
     const qSongs = `
       SELECT
@@ -874,9 +1038,23 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     };
 
-    const [postsRes, sharesResults, songsRes, productsRes] = await Promise.all([
+    const runProductShares = async () => {
+      try {
+        const res = await env.DB
+          .prepare(qProductShares)
+          .bind(...bindCursor([viewerId || 0, userId]))
+          .all();
+        return Array.isArray(res?.results) ? res.results : [];
+      } catch (err) {
+        console.warn("by-user qProductShares query fallback:", err);
+        return [];
+      }
+    };
+
+    const [postsRes, sharesResults, productSharesResults, songsRes, productsRes] = await Promise.all([
       env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
       runShares(),
+      runProductShares(),
       env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
       env.DB.prepare(qProducts).bind(...bindCursor([userId])).all(),
     ]);
@@ -884,6 +1062,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const items = [
       ...(Array.isArray(postsRes.results) ? postsRes.results : []),
       ...sharesResults,
+      ...productSharesResults,
       ...(Array.isArray(songsRes.results) ? songsRes.results : []),
       ...(Array.isArray(productsRes.results) ? productsRes.results : []),
     ];
@@ -1031,6 +1210,65 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         console.error("Failed to populate shared_posts in by-user:", err);
       }
     }
+
+    normalized.forEach((it: any) => {
+      if (it?.shared_product) {
+        let sp: any = it.shared_product;
+        if (typeof sp === "string") {
+          try {
+            sp = JSON.parse(sp);
+          } catch {
+            sp = null;
+          }
+        }
+        if (sp && typeof sp === "object") {
+          const spVerified = toBooleanVerified(sp.author?.is_verified ?? sp.is_verified);
+          const spAuthor = {
+            id: sp.seller_id || sp.user_id || sp.author?.id,
+            name: pickDisplayName(sp.author?.name, sp.author?.username, "Seller"),
+            username: sp.author?.username || "",
+            avatar_url: sp.author?.avatar_url || sp.author?.profile_image_url || "",
+            profile_image_url: sp.author?.profile_image_url || sp.author?.avatar_url || "",
+            is_verified: spVerified,
+            verified: spVerified,
+            role: sp.author?.role || "user",
+          };
+          const rawImgs = parseMediaList(sp.images || sp.media_urls);
+          const pNorm = {
+            ...sp,
+            id: Number(sp.id || sp.product_id || 0),
+            product_id: Number(sp.id || sp.product_id || 0),
+            title: sp.title || sp.name || "Product",
+            name: sp.title || sp.name || "Product",
+            description: sp.description || sp.content || "",
+            content: sp.description || sp.content || "",
+            price: sp.price ?? sp.discount_price ?? sp.main_price ?? null,
+            main_price: sp.main_price ?? null,
+            discount_price: sp.discount_price ?? null,
+            currency: sp.currency || "TZS",
+            location: sp.location || sp.address || "Marketplace",
+            address: sp.address || sp.location || "",
+            images: rawImgs,
+            media_urls: rawImgs,
+            is_verified: spVerified,
+            verified: spVerified,
+            author: spAuthor,
+            user: spAuthor,
+            seller: spAuthor,
+            item_type: "product",
+            source: "product",
+            type: "product",
+            post_type: "product",
+            kind: "product",
+            is_product: true,
+          };
+          it.shared_product = pNorm;
+          if (!it.shared_post) it.shared_post = pNorm;
+          if (!it.shared_post_id) it.shared_post_id = pNorm.id;
+          if (!it.product_id) it.product_id = pNorm.id;
+        }
+      }
+    });
 
     const oldest = normalized.reduce((acc: any, cur: any) => {
       if (!acc) return cur;

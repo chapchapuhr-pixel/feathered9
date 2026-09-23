@@ -6469,22 +6469,38 @@ export const Post = memo(
     const createdAtLabel = formatRelativeTime(p.created_at);
     const postId = getFeedItemId(p);
 
-    const isSharedPost = Boolean(p.shared_post || p.shared_post_id);
-    const originalPost = p.shared_post || (p.shared_post_id && (p as any)._originalPost) || null;
+    const isSharedPost = Boolean(
+      p.shared_post ||
+      p.shared_product ||
+      p.shared_post_id ||
+      p.product_id ||
+      p.item_type === 'product_share' ||
+      p.source === 'product_share' ||
+      p.post_type === 'product_share'
+    );
+    const originalPost =
+      p.shared_product ||
+      p.shared_post ||
+      (p.shared_post_id && (p as any)._originalPost) ||
+      null;
+
     const ownerAuthor = useMemo(() => {
       if (!originalPost) return null;
       return (
         originalPost.author ||
+        originalPost.user ||
+        originalPost.seller ||
+        (originalPost.seller_id && users?.find((u) => Number(u.id) === Number(originalPost.seller_id))) ||
         (originalPost.user_id && users?.find((u) => Number(u.id) === Number(originalPost.user_id))) || {
-          id: originalPost.user_id,
-          name: originalPost.author_name || originalPost.author?.name || 'User',
-          username: originalPost.author_username || originalPost.author?.username || 'user',
+          id: originalPost.seller_id || originalPost.user_id,
+          name: originalPost.author_name || originalPost.author?.name || originalPost.seller_name || 'Seller',
+          username: originalPost.author_username || originalPost.author?.username || 'seller',
           profile_image_url:
             originalPost.author_image ||
             originalPost.author_avatar ||
             originalPost.author?.profile_image_url ||
             null,
-          is_verified: Boolean(originalPost.author_verified || originalPost.author?.is_verified),
+          is_verified: Boolean(originalPost.author_verified || originalPost.author?.is_verified || originalPost.is_verified || originalPost.verified),
         }
       );
     }, [originalPost, users]);
@@ -6497,6 +6513,8 @@ export const Post = memo(
         ? (() => { try { return JSON.parse(originalPost.media_urls); } catch { return []; } })()
         : Array.isArray(originalPost.images)
         ? originalPost.images
+        : typeof originalPost.images === 'string'
+        ? (() => { try { return JSON.parse(originalPost.images); } catch { return [originalPost.images]; } })()
         : originalPost.media_url
         ? [originalPost.media_url]
         : [];
@@ -6513,6 +6531,36 @@ export const Post = memo(
         videoUrl: originalPost.video_url || (isVid ? urls[0] : null),
       };
     }, [originalPost]);
+
+    const isSharedProduct = Boolean(
+      (originalPost && (
+        originalPost.item_type === 'product' ||
+        originalPost.source === 'product' ||
+        originalPost.type === 'product' ||
+        originalPost.post_type === 'product' ||
+        originalPost.kind === 'product' ||
+        originalPost.is_product ||
+        originalPost.product_id != null ||
+        originalPost.price != null ||
+        originalPost.main_price != null ||
+        originalPost.discount_price != null
+      )) ||
+      Boolean(p.shared_product) ||
+      p.item_type === 'product_share' ||
+      p.post_type === 'product_share' ||
+      p.source === 'product_share' ||
+      p.product_id != null
+    );
+
+    const origPriceRaw = originalPost?.price ?? originalPost?.discount_price ?? originalPost?.main_price ?? null;
+    const origPrice = origPriceRaw != null
+      ? (typeof origPriceRaw === 'number' ? origPriceRaw.toLocaleString() : String(origPriceRaw))
+      : null;
+    const origCurrency = originalPost?.currency || 'TZS';
+    const origLoc = originalPost?.location || originalPost?.address || 'Marketplace';
+    const targetSharedProductId = Number(
+      originalPost?.product_id || originalPost?.id || p?.product_id || p?.shared_post_id || 0
+    );
 
     const mediaInfo = getMediaTypeInfo(p);
     const mediaList = useMemo(() => getPostMediaList(p), [p]);
@@ -6845,7 +6893,9 @@ export const Post = memo(
                     <div className="flex items-center gap-1.5 text-[#94A3B8] text-[15px]">
                       {isSharedPost ? (
                         <>
-                          <span className="text-[#38BDF8] font-medium">shared a post</span>
+                          <span className="text-[#38BDF8] font-medium">
+                            {isSharedProduct ? 'shared a product' : 'shared a post'}
+                          </span>
                           <span>•</span>
                           <span>{createdAtLabel}</span>
                           <span>•</span>
@@ -7065,11 +7115,20 @@ export const Post = memo(
                       </div>
                     </div>
 
+                    {/* Product Title if shared product */}
+                    {originalPost.title && (
+                      <div className="px-3 md:px-3.5 pt-3 pb-0.5">
+                        <h4 className="font-bold text-[#F8FAFC] text-[18px] sm:text-[19px] leading-snug">
+                          {originalPost.title}
+                        </h4>
+                      </div>
+                    )}
+
                     {/* Owner Description / Content */}
-                    {originalPost.content && (
+                    {(originalPost.description || originalPost.content) && (
                       <div className="p-3 md:p-3.5 text-[#F8FAFC]">
                         <ExpandableRichText
-                          text={originalPost.content}
+                          text={originalPost.description || originalPost.content}
                           users={users}
                           onProfileClick={onProfileClick}
                           onHashtagClick={onHashtagClick}
@@ -7111,6 +7170,43 @@ export const Post = memo(
                       </div>
                     )}
 
+                    {/* Shared Product Price & View Product Button */}
+                    {isSharedProduct && (
+                      <div className="px-4 py-2.5 flex items-center justify-between border-t border-[#1E293B] bg-[#0A101F]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {origPrice ? (
+                            <>
+                              <span className="text-[#F8FAFC] text-[18px] font-bold">
+                                {origCurrency}
+                              </span>
+                              <span className="text-[#F8FAFC] text-[21px] font-bold">
+                                {origPrice}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-[#94A3B8] text-sm font-medium">
+                              {origLoc || 'Marketplace'}
+                            </span>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-4 py-1.5 rounded-full font-bold text-[15px] transition-colors shadow-sm cursor-pointer shrink-0 flex items-center gap-1.5"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (targetSharedProductId) {
+                              if (onViewProduct) onViewProduct(targetSharedProductId);
+                              else if (onViewProductFromPost) onViewProductFromPost(targetSharedProductId);
+                            }
+                          }}
+                        >
+                          <i className="fas fa-shopping-bag text-xs" />
+                          <span>View product</span>
+                        </button>
+                      </div>
+                    )}
+
                     {/* Owner Audio Preview if audio post */}
                     {(originalPost.song_url || originalPost.audio_url || originalPost.item_type === 'music' || originalPost.item_type === 'song') && (
                       <div className="p-3 border-t border-[#1E293B] bg-[#0B1120] flex items-center justify-between">
@@ -7130,6 +7226,35 @@ export const Post = memo(
                       </div>
                     )}
                   </>
+                ) : isSharedProduct || targetSharedProductId || p.product_id ? (
+                  <div className="p-4 flex items-center justify-between bg-[#0F172A]/50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
+                        <i className="fas fa-store text-lg"></i>
+                      </div>
+                      <div>
+                        <div className="text-[17px] font-bold text-[#F8FAFC]">Marketplace Product</div>
+                        <div className="text-[13px] text-[#94A3B8]">
+                          Product #{targetSharedProductId || p.product_id}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const pid = targetSharedProductId || Number(p.product_id);
+                        if (pid) {
+                          if (onViewProduct) onViewProduct(pid);
+                          else if (onViewProductFromPost) onViewProductFromPost(pid);
+                        }
+                      }}
+                      className="bg-[#1877F2] text-white px-4 py-1.5 rounded-full text-[14px] font-bold hover:bg-[#166FE5] flex items-center gap-1.5"
+                    >
+                      <i className="fas fa-shopping-bag text-xs" />
+                      <span>View product</span>
+                    </button>
+                  </div>
                 ) : (
                   <div className="p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -7268,7 +7393,10 @@ export const Post = memo(
                       className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-4 py-1.5 rounded-full font-bold text-[15px] transition-colors shadow-sm cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (productId) onViewProduct?.(productId);
+                        if (productId) {
+                          if (onViewProduct) onViewProduct(productId);
+                          else if (onViewProductFromPost) onViewProductFromPost(productId);
+                        }
                       }}
                     >
                       View product

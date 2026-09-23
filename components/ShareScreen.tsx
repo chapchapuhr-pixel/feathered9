@@ -186,20 +186,69 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
     }
     setIsPosting(true);
     try {
-      const itemType = post?.item_type || post?.source || 'post';
+      const isProduct = Boolean(
+        post?.item_type === 'product' ||
+        post?.source === 'product' ||
+        post?.type === 'product' ||
+        post?.type === 'marketplace' ||
+        post?.post_type === 'product' ||
+        post?.kind === 'product' ||
+        post?.is_product ||
+        post?.product_id
+      );
+      const isEvent = Boolean(
+        post?.item_type === 'event' ||
+        post?.source === 'event' ||
+        post?.type === 'event' ||
+        post?.event_id
+      );
+      const isSong = Boolean(
+        post?.item_type === 'music' ||
+        post?.item_type === 'song' ||
+        post?.source === 'song' ||
+        post?.type === 'music' ||
+        post?.type === 'song' ||
+        post?.song_id
+      );
+      const isPodcast = Boolean(
+        post?.item_type === 'podcast' ||
+        post?.source === 'podcast' ||
+        post?.type === 'podcast'
+      );
+      const isGroup = Boolean(
+        post?.item_type === 'group_post' ||
+        post?.source === 'group_post' ||
+        post?.group_id
+      );
+
       const itemId = Number(post?.id ?? post?.post_id ?? 0);
       let endpoint = `/api/posts/${itemId}/share`;
-      if (itemType === 'event') {
-        endpoint = post?.event_id ? `/api/events/${post.event_id}/share` : `/api/events/${itemId}/share`;
-      } else if (itemType === 'group_post') {
+      if (isProduct) {
+        const prodId = Number(post?.product_id || post?.id || 0);
+        endpoint = `/api/products/${prodId}/share`;
+      } else if (isEvent) {
+        const evId = Number(post?.event_id || post?.id || 0);
+        endpoint = `/api/events/${evId}/share`;
+      } else if (isGroup) {
         endpoint = '/api/groups/posts/share';
-      } else if (itemType === 'product') {
-        endpoint = post?.product_id ? `/api/products/${post.product_id}/share` : `/api/products/${itemId}/share`;
-      } else if (itemType === 'music' || itemType === 'song') {
-        endpoint = `/api/songs/${itemId}/share`;
-      } else if (itemType === 'podcast') {
+      } else if (isSong) {
+        const sId = Number(post?.song_id || post?.id || 0);
+        endpoint = `/api/songs/${sId}/share`;
+      } else if (isPodcast) {
         endpoint = `/api/podcasts/${itemId}/share`;
       }
+
+      const itemType = isProduct
+        ? 'product'
+        : isEvent
+        ? 'event'
+        : isSong
+        ? 'song'
+        : isPodcast
+        ? 'podcast'
+        : isGroup
+        ? 'group_post'
+        : post?.item_type || post?.source || 'post';
 
       const payload: any = {
         user_id: currentUser?.id,
@@ -212,12 +261,14 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         location: location || undefined,
         audience,
       };
+      if (isProduct) {
+        payload.product_id = Number(post?.product_id || post?.id || 0);
+      }
       if (itemType === 'event') payload.event_id = itemId;
       if (itemType === 'group_post') {
         payload.post_id = itemId;
         payload.group_id = post.group_id;
       }
-      if (itemType === 'product') payload.product_id = itemId;
       if (itemType === 'music' || itemType === 'song') payload.song_id = itemId;
       if (itemType === 'podcast') payload.podcast_id = itemId;
 
@@ -250,19 +301,28 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
           feeling: feeling || undefined,
           location: location || undefined,
           audience,
-          post: response?.shared_post || response?.post || {
-            id: response?.id || Date.now(),
-            post_id: response?.id || Date.now(),
+          post: response?.post || {
+            id: response?.id || response?.share_id || Date.now(),
+            post_id: response?.id || response?.share_id || Date.now(),
             user_id: currentUser?.id,
             author: currentUser,
+            user: currentUser,
             content: shareMessage || '',
+            description: shareMessage || '',
+            message: shareMessage || '',
             feeling: feeling || undefined,
             location: location || undefined,
-            shared_post_id: post.id,
-            shared_post: post,
+            shared_post_id: isProduct ? (post.product_id || post.id) : (post.id || post.post_id),
+            product_id: isProduct ? (post.product_id || post.id) : undefined,
+            shared_post: response?.shared_post || post,
+            shared_product: response?.shared_product || (isProduct ? post : undefined),
+            item_type: isProduct ? 'product_share' : 'share',
+            post_type: isProduct ? 'product_share' : 'share',
+            type: isProduct ? 'product_share' : 'share',
+            source: isProduct ? 'product_share' : 'share',
             created_at: new Date().toISOString(),
-            shares: 0,
-            shares_count: 0,
+            shares: nextShares,
+            shares_count: nextShares,
             likes_count: 0,
             reactions_count: 0,
             reactions: [],

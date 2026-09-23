@@ -729,7 +729,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const whereProductShares: string[] = [];
     const bindsProductShares: any[] = [];
 
-    whereProductShares.push(`psh.destination = 'feed'`);
+    whereProductShares.push(`(psh.destination = 'feed' OR psh.destination = 'profile' OR psh.destination IS NULL OR psh.destination = '')`);
     whereProductShares.push(`COALESCE(pr.is_deleted, 0) = 0`);
 
     if (cursor && cursor.trim()) {
@@ -763,12 +763,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS updated_at,
 
         NULL AS post_id,
-        NULL AS shared_post_id,
+        pr.id AS shared_post_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
         NULL AS group_post_id,
         pr.id AS product_id2,
+        pr.id AS product_id,
 
         psh.user_id AS user_id,
         psh.user_id AS owner_id,
@@ -797,13 +798,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         NULL AS media_url,
         NULL AS media_type,
-        NULL AS media_urls,
+        pr.images AS media_urls,
         NULL AS media_types,
-        NULL AS media_meta,
+        pr.image_variants AS media_meta,
 
-        0 AS comments_count,
-        0 AS reactions_count,
-        NULL AS my_reaction,
+        (SELECT COUNT(*) FROM product_comments pc WHERE pc.product_id = pr.id AND COALESCE(pc.is_deleted, 0) = 0) AS comments_count,
+        (SELECT COUNT(*) FROM product_reactions prr WHERE prr.product_id = pr.id) AS reactions_count,
+        (SELECT prr.type FROM product_reactions prr WHERE prr.product_id = pr.id AND prr.user_id = ? LIMIT 1) AS my_reaction,
         NULL AS reactor_name,
         NULL AS reactions_preview,
         NULL AS reactions_by_type,
@@ -835,13 +836,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         json_object(
           'id', pr.id,
+          'product_id', pr.id,
           'seller_id', pr.seller_id,
           'user_id', pr.seller_id,
           'title', pr.title,
+          'name', pr.title,
           'category', pr.category,
           'description', pr.description,
+          'content', pr.description,
           'country', pr.country,
           'address', pr.address,
+          'location', pr.address,
           'main_price', pr.main_price,
           'discount_price', pr.discount_price,
           'price', COALESCE(pr.discount_price, pr.main_price),
@@ -853,10 +858,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'image_variants', pr.image_variants,
           'thumbnail_url', pr.thumbnail_url,
           'created_at', pr.created_at,
-
+          'item_type', 'product',
+          'source', 'product',
+          'type', 'product',
+          'post_type', 'product',
+          'kind', 'product',
+          'is_product', json('true'),
           'author', json_object(
             'id', pr.seller_id,
-            'name', COALESCE(u.name, u.username, ''),
+            'name', COALESCE(u.name, u.username, 'Seller'),
             'username', u.username,
             'avatar_url',
               CASE
@@ -874,10 +884,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
             'role', COALESCE(u.role, 'user')
           ),
-
           'user', json_object(
             'id', pr.seller_id,
-            'name', COALESCE(u.name, u.username, ''),
+            'name', COALESCE(u.name, u.username, 'Seller'),
             'username', u.username,
             'avatar_url',
               CASE
@@ -896,7 +905,77 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           )
         ) AS shared_product,
 
-        NULL AS shared_post,
+        json_object(
+          'id', pr.id,
+          'product_id', pr.id,
+          'seller_id', pr.seller_id,
+          'user_id', pr.seller_id,
+          'title', pr.title,
+          'name', pr.title,
+          'category', pr.category,
+          'description', pr.description,
+          'content', pr.description,
+          'country', pr.country,
+          'address', pr.address,
+          'location', pr.address,
+          'main_price', pr.main_price,
+          'discount_price', pr.discount_price,
+          'price', COALESCE(pr.discount_price, pr.main_price),
+          'currency', 'TZS',
+          'quantity', pr.quantity,
+          'phone_number', pr.phone_number,
+          'images', pr.images,
+          'media_urls', pr.images,
+          'image_variants', pr.image_variants,
+          'thumbnail_url', pr.thumbnail_url,
+          'created_at', pr.created_at,
+          'item_type', 'product',
+          'source', 'product',
+          'type', 'product',
+          'post_type', 'product',
+          'kind', 'product',
+          'is_product', json('true'),
+          'author', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, 'Seller'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+          'user', json_object(
+            'id', pr.seller_id,
+            'name', COALESCE(u.name, u.username, 'Seller'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_post,
+
         NULL AS shared_song,
         NULL AS shared_event,
         NULL AS shared_story,
@@ -2215,7 +2294,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       const res = await env.DB.prepare(
         `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY ssh.shared_at DESC LIMIT ?`
       )
-        .bind(reactionUserId, ...bindsSongShares, freshCount)
+        .bind(...bindsSongShares, freshCount)
         .all();
       freshSongShares = Array.isArray(res?.results) ? res.results : [];
     } catch (err) {
@@ -2227,7 +2306,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       const res = await env.DB.prepare(
         `${baseSelectEventShares} ${whereEventSharesSql} ORDER BY esh.shared_at DESC LIMIT ?`
       )
-        .bind(reactionUserId, ...bindsEventShares, freshCount)
+        .bind(...bindsEventShares, freshCount)
         .all();
       freshEventShares = Array.isArray(res?.results) ? res.results : [];
     } catch (err) {
@@ -2239,7 +2318,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       const res = await env.DB.prepare(
         `${baseSelectStoryShares} ${whereStorySharesSql} ORDER BY ss.created_at DESC LIMIT ?`
       )
-        .bind(reactionUserId, ...bindsStoryShares, freshCount)
+        .bind(...bindsStoryShares, freshCount)
         .all();
       freshStoryShares = Array.isArray(res?.results) ? res.results : [];
     } catch (err) {
@@ -2342,7 +2421,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         const res = await env.DB.prepare(
           `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY RANDOM() LIMIT ?`
         )
-          .bind(reactionUserId, ...bindsSongShares, exploreCount)
+          .bind(...bindsSongShares, exploreCount)
           .all();
         exploreSongShares = Array.isArray(res?.results) ? res.results : [];
       } catch {}
@@ -2351,7 +2430,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         const res = await env.DB.prepare(
           `${baseSelectEventShares} ${whereEventSharesSql} ORDER BY RANDOM() LIMIT ?`
         )
-          .bind(reactionUserId, ...bindsEventShares, exploreCount)
+          .bind(...bindsEventShares, exploreCount)
           .all();
         exploreEventShares = Array.isArray(res?.results) ? res.results : [];
       } catch {}
@@ -2360,7 +2439,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         const res = await env.DB.prepare(
           `${baseSelectStoryShares} ${whereStorySharesSql} ORDER BY RANDOM() LIMIT ?`
         )
-          .bind(reactionUserId, ...bindsStoryShares, exploreCount)
+          .bind(...bindsStoryShares, exploreCount)
           .all();
         exploreStoryShares = Array.isArray(res?.results) ? res.results : [];
       } catch {}
@@ -2556,7 +2635,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           );
 
           const spAuthor = {
-            id: sp.user_id || sp.author?.id,
+            id: sp.seller_id || sp.user_id || sp.author?.id,
             name:
               sp.author?.name ||
               sp.author_name ||
@@ -2586,15 +2665,58 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             role: sp.author?.role || sp.user?.role || "user",
           };
 
-          normalized.shared_post = {
+          const isProductLike = Boolean(
+            sp.is_product ||
+            sp.item_type === 'product' ||
+            sp.source === 'product' ||
+            sp.type === 'product' ||
+            sp.post_type === 'product' ||
+            sp.kind === 'product' ||
+            sp.price != null ||
+            sp.main_price != null ||
+            item.source === 'product_share' ||
+            item.item_type === 'product_share'
+          );
+
+          const spImages = parseJsonArrayUrls(sp.images || sp.media_urls);
+          const normalizedShared = {
             ...sp,
             ...normalizeMedia(sp),
+            id: Number(sp.id || sp.product_id || 0),
+            product_id: Number(sp.id || sp.product_id || 0),
+            title: sp.title || sp.name || "",
+            name: sp.title || sp.name || "",
             description: sp.description ?? sp.content ?? "",
+            content: sp.content ?? sp.description ?? "",
+            price: sp.price ?? sp.discount_price ?? sp.main_price ?? null,
+            main_price: sp.main_price ?? null,
+            discount_price: sp.discount_price ?? null,
+            currency: sp.currency || "TZS",
+            location: sp.location || sp.address || "Marketplace",
+            address: sp.address || sp.location || "",
+            images: spImages.length > 0 ? spImages : undefined,
+            media_urls: spImages.length > 0 ? spImages : undefined,
             is_verified: spVerified,
             verified: spVerified,
             author: spAuthor,
             user: spAuthor,
+            seller: spAuthor,
+            ...(isProductLike ? {
+              item_type: 'product',
+              source: 'product',
+              type: 'product',
+              post_type: 'product',
+              kind: 'product',
+              is_product: true,
+            } : {}),
           };
+
+          normalized.shared_post = normalizedShared;
+          if (isProductLike) {
+            normalized.shared_product = normalizedShared;
+            normalized.shared_post_id = normalizedShared.id;
+            normalized.product_id = normalizedShared.id;
+          }
         }
       }
 
@@ -2609,28 +2731,86 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           }
         }
         if (sp && typeof sp === "object") {
-          const spVerified = Boolean(sp.author?.is_verified || sp.author?.verified);
+          const spVerified = Boolean(
+            (sp.author?.is_verified ||
+              sp.author?.verified ||
+              sp.user?.is_verified ||
+              sp.user?.verified ||
+              sp.is_verified ||
+              sp.verified) &&
+              sp.is_verified !== 0 &&
+              sp.is_verified !== "0" &&
+              sp.verified !== 0 &&
+              sp.verified !== "0"
+          );
           const spAuthor = {
-            id: sp.seller_id || sp.user_id || sp.author?.id,
-            name: sp.author?.name || sp.author_name || "User",
-            username: sp.author?.username || sp.author_username || "",
+            id: sp.seller_id || sp.user_id || sp.author?.id || sp.user?.id,
+            name:
+              sp.author?.name ||
+              sp.user?.name ||
+              sp.author_name ||
+              sp.seller_name ||
+              "Seller",
+            username:
+              sp.author?.username ||
+              sp.user?.username ||
+              sp.author_username ||
+              "",
             avatar_url:
-              sp.author?.avatar_url || sp.author?.profile_image_url || "",
+              sp.author?.avatar_url ||
+              sp.author?.profile_image_url ||
+              sp.user?.avatar_url ||
+              sp.user?.profile_image_url ||
+              "",
             profile_image_url:
-              sp.author?.profile_image_url || sp.author?.avatar_url || "",
+              sp.author?.profile_image_url ||
+              sp.author?.avatar_url ||
+              sp.user?.profile_image_url ||
+              sp.user?.avatar_url ||
+              "",
             is_verified: spVerified,
             verified: spVerified,
-            role: sp.author?.role || "user",
+            role: sp.author?.role || sp.user?.role || "user",
           };
-          normalized.shared_product = {
+          const pImages = parseJsonArrayUrls(sp.images || sp.media_urls);
+          const normalizedProduct = {
             ...sp,
-            images: parseJsonArrayUrls(sp.images),
-            media_urls: parseJsonArrayUrls(sp.images),
+            id: Number(sp.id || sp.product_id || 0),
+            product_id: Number(sp.id || sp.product_id || 0),
+            title: sp.title || sp.name || "Product",
+            name: sp.title || sp.name || "Product",
+            description: sp.description || sp.content || "",
+            content: sp.description || sp.content || "",
+            price: sp.price ?? sp.discount_price ?? sp.main_price ?? null,
+            main_price: sp.main_price ?? null,
+            discount_price: sp.discount_price ?? null,
+            currency: sp.currency || "TZS",
+            location: sp.location || sp.address || "Marketplace",
+            address: sp.address || sp.location || "",
+            images: pImages,
+            media_urls: pImages,
             is_verified: spVerified,
             verified: spVerified,
             author: spAuthor,
             user: spAuthor,
+            seller: spAuthor,
+            item_type: "product",
+            source: "product",
+            type: "product",
+            post_type: "product",
+            kind: "product",
+            is_product: true,
           };
+          normalized.shared_product = normalizedProduct;
+          if (!normalized.shared_post) {
+            normalized.shared_post = normalizedProduct;
+          }
+          if (!normalized.shared_post_id) {
+            normalized.shared_post_id = normalizedProduct.id;
+          }
+          if (!normalized.product_id) {
+            normalized.product_id = normalizedProduct.id;
+          }
         }
       }
 
@@ -2658,13 +2838,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             verified: ssVerified,
             role: ss.author?.role || "user",
           };
-          normalized.shared_song = {
+          const normalizedSong = {
             ...ss,
             is_verified: ssVerified,
             verified: ssVerified,
             author: ssAuthor,
             user: ssAuthor,
           };
+          normalized.shared_song = normalizedSong;
+          if (!normalized.shared_post) {
+            normalized.shared_post = normalizedSong;
+          }
         }
       }
 
@@ -2692,13 +2876,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             verified: seVerified,
             role: se.author?.role || "user",
           };
-          normalized.shared_event = {
+          const normalizedEvent = {
             ...se,
             is_verified: seVerified,
             verified: seVerified,
             author: seAuthor,
             user: seAuthor,
           };
+          normalized.shared_event = normalizedEvent;
+          if (!normalized.shared_post) {
+            normalized.shared_post = normalizedEvent;
+          }
         }
       }
 
@@ -2728,13 +2916,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             verified: sstVerified,
             role: sst.author?.role || "user",
           };
-          normalized.shared_story = {
+          const normalizedStory = {
             ...sst,
             is_verified: sstVerified,
             verified: sstVerified,
             author: sstAuthor,
             user: sstAuthor,
           };
+          normalized.shared_story = normalizedStory;
+          if (!normalized.shared_post) {
+            normalized.shared_post = normalizedStory;
+          }
         }
       }
 
