@@ -2066,7 +2066,7 @@ export const ShareBottomSheet = memo(
             location: location || undefined,
             taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
             audience: audience,
-            post: response?.shared_post || response?.post || {
+            post: response?.post || response?.shared_post || {
               id: response?.id || Date.now(),
               post_id: response?.id || Date.now(),
               user_id: currentUser?.id,
@@ -7353,7 +7353,15 @@ export const Post = memo(
                 )}
 
                 {(price || productId) && (
-                  <div className="px-4 py-2 flex items-center justify-between border-t border-[#1E293B] mt-1">
+                  <div
+                    className="px-4 py-2 flex items-center justify-between border-t border-[#1E293B] mt-1 cursor-pointer hover:bg-slate-800/30 transition-colors"
+                    onClick={() => {
+                      if (productId) {
+                        if (onViewProduct) onViewProduct(productId);
+                        else if (onViewProductFromPost) onViewProductFromPost(productId);
+                      }
+                    }}
+                  >
                     <div className="flex items-center gap-1">
                       {price ? (
                         <>
@@ -7370,19 +7378,6 @@ export const Post = memo(
                         </span>
                       )}
                     </div>
-
-                    <button
-                      className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-4 py-1.5 rounded-full font-bold text-[15px] transition-colors shadow-sm cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (productId) {
-                          if (onViewProduct) onViewProduct(productId);
-                          else if (onViewProductFromPost) onViewProductFromPost(productId);
-                        }
-                      }}
-                    >
-                      View product
-                    </button>
                   </div>
                 )}
 
@@ -10537,19 +10532,31 @@ export const Feed = memo(({
   const feedMoreRef = useRef<HTMLDivElement | null>(null);
 
   const safeFeedItems = React.useMemo(() => {
-    if (items && items.length > 0) {
-      return items;
+    const rawList = (items && items.length > 0)
+      ? items
+      : (feedItemsProp && feedItemsProp.length > 0)
+      ? feedItemsProp.map((item: any) => ({
+          kind: "post" as const,
+          data: item,
+          created_at: item.created_at,
+        }))
+      : [];
+
+    const seenKeys = new Set<string>();
+    const deduped: FeedItem[] = [];
+
+    for (const item of rawList) {
+      if (!item) continue;
+      const data = item.data || item;
+      const key = getFeedKey(data) || (data?.id ? `${getFeedItemType(data)}:${data.id}` : null);
+      if (key) {
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+      }
+      deduped.push(item);
     }
 
-    if (feedItemsProp && feedItemsProp.length > 0) {
-      return feedItemsProp.map((item: any) => ({
-        kind: "post" as const,
-        data: item,
-        created_at: item.created_at,
-      }));
-    }
-
-    return [];
+    return deduped;
   }, [items, feedItemsProp]);
 
   // ✅ Facebook-style pagination: 15 posts initial + silent infinite scroll (no visible loader)

@@ -2471,16 +2471,26 @@ const authorFromFeedRow = (row: any): User => {
 };
 
 const mergeFeed = (prev: PostType[], incoming: PostType[]): PostType[] => {
+  const getItemKey = (p: any): string => {
+    return getFeedKey(p) || (p?.id ? `${getFeedItemType(p)}:${p.id}` : `${p?.source || p?.item_type || 'post'}:${p.id}`);
+  };
+
   const map = new Map<string, PostType>();
   prev.forEach((p: any) => {
-    const key = getFeedKey(p) || `${p?.source || p?.item_type || 'post'}:${p.id}`;
+    const key = getItemKey(p);
     map.set(key, p);
   });
 
   incoming.forEach((p: any) => {
-    const key = getFeedKey(p) || `${p?.source || p?.item_type || 'post'}:${p.id}`;
+    const key = getItemKey(p);
     const existing = map.get(key);
     if (existing) {
+      const maxShares = Math.max(
+        safeNumber((existing as any).shares, 0),
+        safeNumber((existing as any).shares_count, 0),
+        safeNumber((p as any).shares, 0),
+        safeNumber((p as any).shares_count, 0)
+      );
       map.set(key, {
         ...existing,
         ...p,
@@ -2488,19 +2498,34 @@ const mergeFeed = (prev: PostType[], incoming: PostType[]): PostType[] => {
         reactions_count: (p as any).reactions_count !== undefined ? (p as any).reactions_count : (existing as any).reactions_count,
         my_reaction: (p as any).my_reaction !== undefined && (p as any).my_reaction !== null ? (p as any).my_reaction : (existing as any).my_reaction,
         myReaction: (p as any).myReaction !== undefined && (p as any).myReaction !== null ? (p as any).myReaction : (existing as any).myReaction,
-        shares: Math.max((existing as any).shares || 0, (p as any).shares || 0, (p as any).shares_count || 0),
-        shares_count: Math.max((existing as any).shares_count || 0, (p as any).shares_count || 0, (p as any).shares || 0),
-        comments_count: Math.max((existing as any).comments_count || 0, (p as any).comments_count || 0),
+        shares: maxShares,
+        shares_count: maxShares,
+        comments_count: Math.max(safeNumber((existing as any).comments_count, 0), safeNumber((p as any).comments_count, 0)),
       } as any);
     } else {
       map.set(key, p);
     }
   });
 
-  const prevKeys = new Set(prev.map((p: any) => getFeedKey(p) || `${p?.source || p?.item_type || 'post'}:${p.id}`));
-  const newOnes = incoming.filter((p: any) => !prevKeys.has(getFeedKey(p) || `${p?.source || p?.item_type || 'post'}:${p.id}`));
+  const prevKeys = new Set(prev.map((p: any) => getItemKey(p)));
+  const newOnes = incoming.filter((p: any) => !prevKeys.has(getItemKey(p)));
 
-  return [...newOnes, ...prev.map((p: any) => map.get(getFeedKey(p) || `${p?.source || p?.item_type || 'post'}:${p.id}`)!).filter(Boolean)];
+  const combined = [
+    ...newOnes,
+    ...prev.map((p: any) => map.get(getItemKey(p))!).filter(Boolean),
+  ];
+
+  const seenKeys = new Set<string>();
+  const deduped: PostType[] = [];
+  for (const item of combined) {
+    const k = getItemKey(item);
+    if (k && !seenKeys.has(k)) {
+      seenKeys.add(k);
+      deduped.push(item);
+    }
+  }
+
+  return deduped;
 };
 
 const createFallbackUser = (): User => {
@@ -3433,8 +3458,20 @@ useEffect(() => {
 }, [rotatedReels]);
 
 const mixedFeedItems = useMemo(() => {
-  // IMPORTANT: posts stay exactly as feeds.ts returned them
-  const postItems = safeArray(posts).map((post) => ({
+  // Deduplicate posts by feed key first
+  const seenKeys = new Set<string>();
+  const uniquePosts: PostType[] = [];
+  for (const post of safeArray(posts)) {
+    if (!post) continue;
+    const key = getFeedKey(post) || (post.id ? `${getFeedItemType(post)}:${post.id}` : null);
+    if (key) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    uniquePosts.push(post);
+  }
+
+  const postItems = uniquePosts.map((post) => ({
     kind: 'post' as const,
     data: post,
     created_at: post?.created_at || '',
@@ -4500,11 +4537,18 @@ const loadMoreFeed = useCallback(async () => {
 
     setExtraFeedItems(prev => {
       const map = new Map<string, FeedItem>();
+      const existingKeys = new Set<string>();
+      safeArray(posts).forEach((p: any) => {
+        const k = getFeedKey(p) || (p?.id ? `${getFeedItemType(p)}:${p.id}` : null);
+        if (k) existingKeys.add(k);
+      });
 
       [...prev, ...incoming].forEach((item: any) => {
         const post = item.data || item;
-        const key = post.feed_key || `${post.source || post.item_type || "post"}:${post.id}`;
-        if (!map.has(key)) map.set(key, item);
+        const key = getFeedKey(post) || post.feed_key || `${post.source || post.item_type || "post"}:${post.id}`;
+        if (!existingKeys.has(key) && !map.has(key)) {
+          map.set(key, item);
+        }
       });
 
       return Array.from(map.values());
@@ -5766,6 +5810,15 @@ const navigateTo = useCallback((target: View) => {
         lastGoodPostsRef.current = next;
         return next;
       });
+
+      setExtraFeedItems(prev => safeArray(prev).filter((item: any) => {
+        const p = item?.data || item;
+        return (
+          p?.feed_key !== `product:${productId}` &&
+          !(Number(p?.product_id) === productId) &&
+          !(Number(p?.id) === productId && (p?.type === 'marketplace' || p?.item_type === 'product'))
+        );
+      }));
 
       if (Number(currentUser.id) === Number(selectedUserId)) {
         setProfilePosts(prev => {
@@ -10559,13 +10612,22 @@ const handleShareComplete = useCallback(
 
     if (data?.success || targetPost) {
       if (targetPostId) {
+        const matchesTarget = (p: any) =>
+          Number(p.id) === targetPostId ||
+          Number(p.product_id) === targetPostId ||
+          Number(p?.meta?.marketplace?.id) === targetPostId ||
+          p.feed_key === `product:${targetPostId}` ||
+          p.feed_key === `post:${targetPostId}`;
+
+        const nextSharesCount = safeNumber(data?.shares) || (safeNumber(targetPost?.shares_count ?? targetPost?.shares) + 1);
+
         setPosts((prev) => {
           const next = safeArray(prev).map((p: any) =>
-            Number(p.id) === targetPostId
+            matchesTarget(p)
               ? normalizePost({
                   ...p,
-                  shares: safeNumber(p.shares) + 1,
-                  shares_count: safeNumber(p.shares_count ?? p.shares) + 1,
+                  shares: Math.max(safeNumber(p.shares) + 1, nextSharesCount),
+                  shares_count: Math.max(safeNumber(p.shares_count ?? p.shares) + 1, nextSharesCount),
                 })
               : p
           );
@@ -10576,11 +10638,11 @@ const handleShareComplete = useCallback(
 
         setProfilePosts((prev) => {
           return safeArray(prev).map((p: any) =>
-            Number(p.id) === targetPostId
+            matchesTarget(p)
               ? normalizePost({
                   ...p,
-                  shares: safeNumber(p.shares) + 1,
-                  shares_count: safeNumber(p.shares_count ?? p.shares) + 1,
+                  shares: Math.max(safeNumber(p.shares) + 1, nextSharesCount),
+                  shares_count: Math.max(safeNumber(p.shares_count ?? p.shares) + 1, nextSharesCount),
                 })
               : p
           );
