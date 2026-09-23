@@ -474,6 +474,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS type, NULL AS post_type, NULL AS kind, NULL AS meta,
 
         NULL AS shared_post,
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
 
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM posts p
@@ -716,6 +720,11 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
             (SELECT pr3.type FROM post_reactions pr3 WHERE pr3.post_id = p.id AND pr3.user_id = ? LIMIT 1)
         ) AS shared_post,
 
+        NULL AS shared_product,
+        NULL AS shared_song,
+        NULL AS shared_event,
+        NULL AS shared_story,
+
         NULL AS group_id, NULL AS group_name, NULL AS group_image
       FROM post_shares ps
       JOIN posts p ON p.id = ps.post_id
@@ -729,7 +738,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const whereProductShares: string[] = [];
     const bindsProductShares: any[] = [];
 
-    whereProductShares.push(`(psh.destination = 'feed' OR psh.destination = 'profile' OR psh.destination IS NULL OR psh.destination = '')`);
+    whereProductShares.push(
+      `(psh.destination = 'feed' OR psh.destination = 'profile' OR psh.destination IS NULL OR psh.destination = '')`
+    );
     whereProductShares.push(`COALESCE(pr.is_deleted, 0) = 0`);
 
     if (cursor && cursor.trim()) {
@@ -794,7 +805,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(psh.message, '') AS description,
         COALESCE(psh.message, '') AS message,
         'public' AS visibility,
-        0 AS views, 0 AS shares,
+        0 AS views,
+        (SELECT COUNT(*) FROM product_shares psh_ct WHERE psh_ct.product_id = pr.id) AS shares,
+        (SELECT COUNT(*) FROM product_shares psh_ct WHERE psh_ct.product_id = pr.id) AS shares_count,
+        (SELECT COUNT(*) FROM product_shares psh_ct WHERE psh_ct.product_id = pr.id) AS share_count,
 
         NULL AS media_url,
         NULL AS media_type,
@@ -857,9 +871,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'media_urls', pr.images,
           'image_variants', pr.image_variants,
           'thumbnail_url', pr.thumbnail_url,
-          'shares', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt WHERE psh_cnt.product_id = pr.id), pr.shares_count, 0),
-          'shares_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt WHERE psh_cnt.product_id = pr.id), pr.shares_count, 0),
-          'share_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt WHERE psh_cnt.product_id = pr.id), pr.shares_count, 0),
           'created_at', pr.created_at,
           'item_type', 'product',
           'source', 'product',
@@ -908,80 +919,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           )
         ) AS shared_product,
 
-        json_object(
-          'id', pr.id,
-          'product_id', pr.id,
-          'seller_id', pr.seller_id,
-          'user_id', pr.seller_id,
-          'title', pr.title,
-          'name', pr.title,
-          'category', pr.category,
-          'description', pr.description,
-          'content', pr.description,
-          'country', pr.country,
-          'address', pr.address,
-          'location', pr.address,
-          'main_price', pr.main_price,
-          'discount_price', pr.discount_price,
-          'price', COALESCE(pr.discount_price, pr.main_price),
-          'currency', 'TZS',
-          'quantity', pr.quantity,
-          'phone_number', pr.phone_number,
-          'images', pr.images,
-          'media_urls', pr.images,
-          'image_variants', pr.image_variants,
-          'thumbnail_url', pr.thumbnail_url,
-          'shares', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt2 WHERE psh_cnt2.product_id = pr.id), pr.shares_count, 0),
-          'shares_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt2 WHERE psh_cnt2.product_id = pr.id), pr.shares_count, 0),
-          'share_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_cnt2 WHERE psh_cnt2.product_id = pr.id), pr.shares_count, 0),
-          'created_at', pr.created_at,
-          'item_type', 'product',
-          'source', 'product',
-          'type', 'product',
-          'post_type', 'product',
-          'kind', 'product',
-          'is_product', json('true'),
-          'author', json_object(
-            'id', pr.seller_id,
-            'name', COALESCE(u.name, u.username, 'Seller'),
-            'username', u.username,
-            'avatar_url',
-              CASE
-                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u.profile_image_url) > 300 THEN NULL
-                ELSE u.profile_image_url
-              END,
-            'profile_image_url',
-              CASE
-                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u.profile_image_url) > 300 THEN NULL
-                ELSE u.profile_image_url
-              END,
-            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
-            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
-            'role', COALESCE(u.role, 'user')
-          ),
-          'user', json_object(
-            'id', pr.seller_id,
-            'name', COALESCE(u.name, u.username, 'Seller'),
-            'username', u.username,
-            'avatar_url',
-              CASE
-                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u.profile_image_url) > 300 THEN NULL
-                ELSE u.profile_image_url
-              END,
-            'profile_image_url',
-              CASE
-                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
-                WHEN length(u.profile_image_url) > 300 THEN NULL
-                ELSE u.profile_image_url
-              END,
-            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
-            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
-          )
-        ) AS shared_post,
-
+        NULL AS shared_post,
         NULL AS shared_song,
         NULL AS shared_event,
         NULL AS shared_story,
@@ -994,7 +932,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     `;
 
     // ============================================================
-    // 1d) SONG SHARES
+    // 1d) SONG SHARES  (✅ viewerId bug fixed)
     // ============================================================
     const whereSongShares: string[] = [];
     const bindsSongShares: any[] = [];
@@ -1065,9 +1003,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(ssh.message, '') AS message,
         'public' AS visibility,
         0 AS views,
-        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS shares,
-        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS shares_count,
-        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS share_count,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS shares,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS shares_count,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS share_count,
 
         s.cover_image_url AS media_url,
         'image' AS media_type,
@@ -1077,7 +1015,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         (SELECT COUNT(*) FROM song_comments sc WHERE sc.song_id = s.id AND COALESCE(sc.is_deleted, 0) = 0) AS comments_count,
         (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id) AS reactions_count,
-        (SELECT sr.type FROM song_reactions sr WHERE sr.song_id = s.id AND sr.user_id = ${viewerId || 0} LIMIT 1) AS my_reaction,
+        (SELECT sr.type FROM song_reactions sr WHERE sr.song_id = s.id AND sr.user_id = ? LIMIT 1) AS my_reaction,
         NULL AS reactor_name,
         NULL AS reactions_preview,
         NULL AS reactions_by_type,
@@ -2011,9 +1949,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         pr.title AS content,
         'public' AS visibility,
         0 AS views,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS shares,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS shares_count,
-        COALESCE((SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id), pr.shares_count, 0) AS share_count,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS shares,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS shares_count,
+        (SELECT COUNT(*) FROM product_shares psh WHERE psh.product_id = pr.id) AS share_count,
 
         NULL AS media_url, NULL AS media_type,
         pr.images AS media_urls,
@@ -2058,9 +1996,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'address', pr.address,
           'images', pr.images,
           'image_variants', pr.image_variants,
-          'shares', COALESCE((SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id), pr.shares_count, 0),
-          'shares_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id), pr.shares_count, 0),
-          'share_count', COALESCE((SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id), pr.shares_count, 0),
+          'shares', (SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id),
+          'shares_count', (SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id),
+          'share_count', (SELECT COUNT(*) FROM product_shares psh_m WHERE psh_m.product_id = pr.id),
           'marketplace', json_object(
             'id', pr.id,
             'product_id', pr.id,
@@ -2305,12 +2243,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       console.warn("freshProductShares fallback:", err);
     }
 
+    // ✅ FIX: bind reactionUserId for the my_reaction subquery in baseSelectSongShares
     let freshSongShares: any[] = [];
     try {
       const res = await env.DB.prepare(
         `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY ssh.shared_at DESC LIMIT ?`
       )
-        .bind(...bindsSongShares, freshCount)
+        .bind(reactionUserId, ...bindsSongShares, freshCount)
         .all();
       freshSongShares = Array.isArray(res?.results) ? res.results : [];
     } catch (err) {
@@ -2433,11 +2372,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         exploreProductShares = Array.isArray(res?.results) ? res.results : [];
       } catch {}
 
+      // ✅ FIX: bind reactionUserId
       try {
         const res = await env.DB.prepare(
           `${baseSelectSongShares} ${whereSongSharesSql} ORDER BY RANDOM() LIMIT ?`
         )
-          .bind(...bindsSongShares, exploreCount)
+          .bind(reactionUserId, ...bindsSongShares, exploreCount)
           .all();
         exploreSongShares = Array.isArray(res?.results) ? res.results : [];
       } catch {}
@@ -2651,12 +2591,13 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           );
 
           const spAuthor = {
-            id: sp.seller_id || sp.user_id || sp.author?.id,
+            id: sp.seller_id || sp.user_id || sp.uploader_id || sp.author?.id,
             name:
               sp.author?.name ||
               sp.author_name ||
               sp.user?.name ||
               sp.name ||
+              sp.artist_name ||
               "User",
             username:
               sp.author?.username ||
