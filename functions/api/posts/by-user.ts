@@ -804,6 +804,199 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
+    // ---------------- SONG SHARES ----------------
+    const qSongShares = `
+      SELECT
+        'song_share' AS source,
+        'song_share' AS item_type,
+        ssh.id AS id,
+        ('song_share:' || CAST(ssh.id AS TEXT)) AS feed_key,
+        ssh.shared_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        NULL AS shared_post_id,
+        NULL AS reel_id,
+        s.id AS song_id,
+        s.id AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+
+        ssh.user_id AS user_id,
+        ssh.user_id AS owner_id,
+        'user_id' AS owner_field,
+        COALESCE(NULLIF(TRIM(su.username), ''), 'user') AS username,
+        COALESCE(NULLIF(TRIM(su.name), ''), NULLIF(TRIM(su.username), ''), 'User') AS name,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(ssh.message, '') AS content,
+        'public' AS visibility,
+        0 AS views,
+        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS shares,
+        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS shares_count,
+        (SELECT COUNT(*) FROM song_shares ssh_cnt WHERE ssh_cnt.song_id = s.id) AS share_count,
+
+        s.cover_image_url AS media_url,
+        'image' AS media_type,
+        CASE
+          WHEN s.cover_image_url IS NOT NULL AND s.cover_image_url != ''
+          THEN json_array(s.cover_image_url)
+          ELSE json_array()
+        END AS media_urls,
+        json_array('image') AS media_types,
+        NULL AS media_meta,
+
+        (SELECT COUNT(*) FROM song_comments sc WHERE sc.song_id = s.id AND COALESCE(sc.is_deleted, 0) = 0) AS comments_count,
+        (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id) AS reactions_count,
+        (SELECT sr.type FROM song_reactions sr WHERE sr.song_id = s.id AND sr.user_id = ? LIMIT 1) AS my_reaction,
+
+        NULL AS reactor_name,
+        NULL AS reactions_preview,
+        NULL AS reactions_by_type,
+
+        NULL AS video_url,
+        NULL AS caption,
+        NULL AS song_name,
+        s.audio_url AS audio_url,
+        0 AS audio_start,
+        0 AS audio_end,
+        NULL AS location,
+        NULL AS sound_key,
+        NULL AS sound_id,
+
+        s.title AS song_title,
+        s.artist_name AS song_artist_name,
+        s.album_name AS song_album_name,
+        s.cover_image_url AS song_cover_image_url,
+        s.duration_seconds AS song_duration_seconds,
+        s.genre AS song_genre,
+        COALESCE(s.likes_count, 0) AS song_likes_count,
+        COALESCE(s.plays_count, 0) AS song_plays_count,
+
+        'song_share' AS type,
+        'song_share' AS post_type,
+        'song_share' AS kind,
+        json_object(
+          'kind', 'song_share',
+          'type', 'song_share',
+          'share_id', ssh.id,
+          'original_song_id', s.id,
+          'destination', ssh.destination,
+          'message', ssh.message,
+          'item_type', ssh.item_type
+        ) AS meta,
+
+        json_object(
+          'id', s.id,
+          'song_id', s.id,
+          'uploader_id', s.uploader_id,
+          'user_id', s.uploader_id,
+          'title', s.title,
+          'artist_name', s.artist_name,
+          'album_name', s.album_name,
+          'cover_image_url', s.cover_image_url,
+          'cover', s.cover_image_url,
+          'audio_url', s.audio_url,
+          'duration_seconds', s.duration_seconds,
+          'genre', s.genre,
+          'created_at', s.created_at,
+          'item_type', 'music',
+          'source', 'song',
+          'type', 'music',
+          'is_song', json('true'),
+          'author', json_object(
+            'id', s.uploader_id,
+            'name', COALESCE(u.name, u.username, 'Artist'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          )
+        ) AS shared_song,
+
+        json_object(
+          'id', s.id,
+          'song_id', s.id,
+          'uploader_id', s.uploader_id,
+          'user_id', s.uploader_id,
+          'title', s.title,
+          'artist_name', s.artist_name,
+          'album_name', s.album_name,
+          'cover_image_url', s.cover_image_url,
+          'cover', s.cover_image_url,
+          'audio_url', s.audio_url,
+          'duration_seconds', s.duration_seconds,
+          'genre', s.genre,
+          'created_at', s.created_at,
+          'item_type', 'music',
+          'source', 'song',
+          'type', 'music',
+          'is_song', json('true'),
+          'author', json_object(
+            'id', s.uploader_id,
+            'name', COALESCE(u.name, u.username, 'Artist'),
+            'username', u.username,
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          )
+        ) AS shared_post,
+
+        NULL AS group_id,
+        NULL AS group_name,
+        NULL AS group_image
+
+      FROM song_shares ssh
+      JOIN songs s ON s.id = ssh.song_id
+      LEFT JOIN users su ON su.id = ssh.user_id
+      LEFT JOIN users u ON u.id = s.uploader_id
+      WHERE ssh.user_id = ?
+        AND (ssh.destination = 'feed' OR ssh.destination = 'profile' OR ssh.destination IS NULL OR ssh.destination = '')
+        AND COALESCE(s.is_deleted, 0) = 0
+        ${cursor ? `AND ssh.shared_at < ?` : ""}
+      ORDER BY ssh.shared_at DESC
+      LIMIT ?
+    `;
+
     // ---------------- SONGS ----------------
     const qSongs = `
       SELECT
@@ -1055,13 +1248,25 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     };
 
-    // ✅ FIX: qProducts needs [viewerId, userId] — not just [userId]
-    //          because it has a `my_reaction` subquery using `?`
-    const [postsRes, sharesResults, productSharesResults, songsRes, productsRes] =
+    const runSongShares = async () => {
+      try {
+        const res = await env.DB
+          .prepare(qSongShares)
+          .bind(...bindCursor([viewerId || 0, userId]))
+          .all();
+        return Array.isArray(res?.results) ? res.results : [];
+      } catch (err) {
+        console.warn("by-user qSongShares query fallback:", err);
+        return [];
+      }
+    };
+
+    const [postsRes, sharesResults, productSharesResults, songSharesResults, songsRes, productsRes] =
       await Promise.all([
         env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
         runShares(),
         runProductShares(),
+        runSongShares(),
         env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
         env.DB.prepare(qProducts).bind(...bindCursor([viewerId || 0, userId])).all(),
       ]);
@@ -1070,6 +1275,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       ...(Array.isArray(postsRes.results) ? postsRes.results : []),
       ...sharesResults,
       ...productSharesResults,
+      ...songSharesResults,
       ...(Array.isArray(songsRes.results) ? songsRes.results : []),
       ...(Array.isArray(productsRes.results) ? productsRes.results : []),
     ];
@@ -1352,6 +1558,68 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           if (!it.shared_post) it.shared_post = pNorm;
           if (!it.shared_post_id) it.shared_post_id = pNorm.id;
           if (!it.product_id) it.product_id = pNorm.id;
+        }
+      }
+
+      // ============================================================
+      // Normalize shared_song
+      // ============================================================
+      if (it?.shared_song) {
+        let ss = it.shared_song;
+        if (typeof ss === "string") {
+          try {
+            ss = JSON.parse(ss);
+          } catch {
+            ss = null;
+          }
+        }
+        if (ss && typeof ss === "object") {
+          const ssVerified = toBooleanVerified(
+            ss.author?.is_verified ?? ss.is_verified
+          );
+          const ssAuthor = {
+            id: ss.uploader_id || ss.user_id || ss.author?.id,
+            name: pickDisplayName(
+              ss.author?.name,
+              ss.artist_name || ss.author?.username,
+              "Artist"
+            ),
+            username: ss.author?.username || "",
+            avatar_url:
+              ss.author?.avatar_url || ss.author?.profile_image_url || "",
+            profile_image_url:
+              ss.author?.profile_image_url || ss.author?.avatar_url || "",
+            is_verified: ssVerified,
+            verified: ssVerified,
+            role: ss.author?.role || "user",
+          };
+
+          const sNorm = {
+            ...ss,
+            id: Number(ss.id || ss.song_id || 0),
+            song_id: Number(ss.id || ss.song_id || 0),
+            title: ss.title || "Untitled Track",
+            artist_name: ss.artist_name || ssAuthor.name || "Artist",
+            album_name: ss.album_name || null,
+            cover_image_url: ss.cover_image_url || ss.cover || null,
+            cover: ss.cover_image_url || ss.cover || null,
+            audio_url: ss.audio_url || null,
+            duration_seconds: ss.duration_seconds || null,
+            genre: ss.genre || null,
+            is_verified: ssVerified,
+            verified: ssVerified,
+            author: ssAuthor,
+            user: ssAuthor,
+            item_type: "music",
+            source: "song",
+            type: "music",
+            is_song: true,
+          };
+
+          it.shared_song = sNorm;
+          if (!it.shared_post) it.shared_post = sNorm;
+          if (!it.shared_post_id) it.shared_post_id = sNorm.id;
+          if (!it.song_id) it.song_id = sNorm.id;
         }
       }
     });

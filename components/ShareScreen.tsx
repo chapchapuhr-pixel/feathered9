@@ -135,7 +135,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
       (post?.media_url && String(post.media_url).match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i));
 
     const isSong =
-      post?.song_id || post?.song || post?.item_type === 'song' || post?.item_type === 'music';
+      post?.song_id || post?.song_id2 || post?.song || post?.item_type === 'song' || post?.item_type === 'music';
 
     const isProduct = post?.item_type === 'product' || post?.source === 'product';
     const isEvent = post?.item_type === 'event' || post?.source === 'event';
@@ -145,7 +145,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
       return count > 1 ? `Photos from ${authorName}'s post` : `Photo from ${authorName}'s post`;
     }
     if (hasVideo) return `Video from ${authorName}'s post`;
-    if (isSong) return `Song from ${authorName}'s post`;
+    if (isSong) return post?.title ? `Song: ${post.title}` : `Song from ${authorName}`;
     if (isProduct) return `Product from ${authorName}`;
     if (isEvent) return `Event from ${authorName}`;
     return `Post from ${authorName}'s post`;
@@ -165,12 +165,15 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
 
   const cardThumbnail = useMemo(() => {
     return (
+      post?.cover_image_url ||
+      post?.song_cover_image_url ||
+      post?.cover_url ||
+      post?.cover ||
       (Array.isArray(post?.media_urls) && post.media_urls[0]) ||
       (Array.isArray(post?.images) && post.images[0]) ||
       post?.media_url ||
       post?.thumbnail ||
       post?.thumbnail_url ||
-      post?.cover_url ||
       post?.image ||
       avatarFrom(ownerAuthor) ||
       ''
@@ -232,7 +235,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
       } else if (isGroup) {
         endpoint = '/api/groups/posts/share';
       } else if (isSong) {
-        const sId = Number(post?.song_id || post?.id || 0);
+        const sId = Number(post?.song_id || post?.song_id2 || post?.id || 0);
         endpoint = `/api/songs/${sId}/share`;
       } else if (isPodcast) {
         endpoint = `/api/podcasts/${itemId}/share`;
@@ -249,6 +252,8 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         : isGroup
         ? 'group_post'
         : post?.item_type || post?.source || 'post';
+
+      const songTargetId = Number(post?.song_id || post?.song_id2 || post?.id || itemId || 0);
 
       const payload: any = {
         user_id: currentUser?.id,
@@ -269,7 +274,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         payload.post_id = itemId;
         payload.group_id = post.group_id;
       }
-      if (itemType === 'music' || itemType === 'song') payload.song_id = itemId;
+      if (itemType === 'music' || itemType === 'song') payload.song_id = songTargetId;
       if (itemType === 'podcast') payload.podcast_id = itemId;
 
       const response = await apiFetch(endpoint, {

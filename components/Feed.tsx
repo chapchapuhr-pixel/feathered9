@@ -6202,7 +6202,7 @@ export const Post = memo(
 
     useEffect(() => {
       const handleDeleting = (e: any) => {
-        const id = Number(p?.id || p?.post_id || p?.event_id || p?.product_id || 0);
+        const id = Number(p?.id || p?.post_id || p?.event_id || p?.product_id || p?.song_id2 || p?.song_id || 0);
         const targetId = Number(e?.detail?.id || 0);
         if (id && targetId && id === targetId) {
           setIsExiting(true);
@@ -6218,7 +6218,7 @@ export const Post = memo(
         window.removeEventListener('product-deleting', handleDeleting);
         window.removeEventListener('song-deleting', handleDeleting);
       };
-    }, [p?.id, p?.post_id, p?.event_id, p?.product_id]);
+    }, [p?.id, p?.post_id, p?.event_id, p?.product_id, p?.song_id2, p?.song_id]);
 
     const exitAnimClass = `w-full transition-all duration-400 ease-out origin-top ${
       isExiting
@@ -6477,10 +6477,38 @@ export const Post = memo(
     const createdAtLabel = formatRelativeTime(p.created_at);
     const postId = getFeedItemId(p);
 
+    const isSharedSong = Boolean(
+      p.shared_song ||
+      p.item_type === 'song_share' ||
+      p.source === 'song_share' ||
+      p.type === 'song_share' ||
+      p.post_type === 'song_share' ||
+      p.item_type === 'music_share' ||
+      p.source === 'music_share' ||
+      (p.shared_post && (
+        p.shared_post.is_song ||
+        p.shared_post.item_type === 'music' ||
+        p.shared_post.item_type === 'song' ||
+        p.shared_post.source === 'song' ||
+        p.shared_post.type === 'music' ||
+        p.shared_post.type === 'song' ||
+        !!p.shared_post.song_id ||
+        !!p.shared_post.song_id2 ||
+        (!!p.shared_post.audio_url && (!!p.shared_post.artist_name || !!p.shared_post.song_cover_image_url || !!p.shared_post.cover_image_url))
+      ))
+    );
+
     const isSharedPost = Boolean(
-      p.shared_post ||
+      p.shared_song ||
       p.shared_product ||
+      p.shared_post ||
       (p.shared_post_id && p.item_type !== 'product' && p.source !== 'product') ||
+      p.item_type === 'song_share' ||
+      p.source === 'song_share' ||
+      p.type === 'song_share' ||
+      p.post_type === 'song_share' ||
+      p.item_type === 'music_share' ||
+      p.source === 'music_share' ||
       p.item_type === 'product_share' ||
       p.source === 'product_share' ||
       p.post_type === 'product_share' ||
@@ -6490,10 +6518,23 @@ export const Post = memo(
       p.post_type === 'share'
     );
     const originalPost =
+      p.shared_song ||
       p.shared_product ||
       p.shared_post ||
       (p.shared_post_id && (p as any)._originalPost) ||
-      null;
+      (isSharedSong ? {
+        id: p.song_id2 || p.song_id || p.id,
+        song_id: p.song_id2 || p.song_id || p.id,
+        title: p.song_title || p.title || 'Untitled Track',
+        artist_name: p.song_artist_name || p.artist_name || 'Artist',
+        album_name: p.song_album_name || p.album_name,
+        cover_image_url: p.song_cover_image_url || p.cover_image_url || p.cover_url || p.cover,
+        audio_url: p.audio_url,
+        duration_seconds: p.song_duration_seconds || p.duration_seconds,
+        genre: p.song_genre || p.genre,
+        uploader_id: p.uploader_id || p.user_id,
+        is_song: true,
+      } : null);
 
     const ownerAuthor = useMemo(() => {
       if (!originalPost) return null;
@@ -6502,10 +6543,11 @@ export const Post = memo(
         originalPost.user ||
         originalPost.seller ||
         (originalPost.seller_id && users?.find((u) => Number(u.id) === Number(originalPost.seller_id))) ||
+        (originalPost.uploader_id && users?.find((u) => Number(u.id) === Number(originalPost.uploader_id))) ||
         (originalPost.user_id && users?.find((u) => Number(u.id) === Number(originalPost.user_id))) || {
-          id: originalPost.seller_id || originalPost.user_id,
-          name: originalPost.author_name || originalPost.author?.name || originalPost.seller_name || 'Seller',
-          username: originalPost.author_username || originalPost.author?.username || 'seller',
+          id: originalPost.uploader_id || originalPost.seller_id || originalPost.user_id,
+          name: originalPost.artist_name || originalPost.author_name || originalPost.author?.name || originalPost.seller_name || 'Artist',
+          username: originalPost.author_username || originalPost.author?.username || 'artist',
           profile_image_url:
             originalPost.author_image ||
             originalPost.author_avatar ||
@@ -6517,7 +6559,7 @@ export const Post = memo(
     }, [originalPost, users]);
 
     const origMediaInfo = useMemo(() => {
-      if (!originalPost) return null;
+      if (!originalPost || isSharedSong) return null;
       const rawUrls = Array.isArray(originalPost.media_urls)
         ? originalPost.media_urls
         : typeof originalPost.media_urls === 'string'
@@ -6541,7 +6583,7 @@ export const Post = memo(
         isVideo: isVid,
         videoUrl: originalPost.video_url || (isVid ? urls[0] : null),
       };
-    }, [originalPost]);
+    }, [originalPost, isSharedSong]);
 
     const isSharedProduct = Boolean(
       (originalPost && (
@@ -6562,6 +6604,41 @@ export const Post = memo(
       p.source === 'product_share' ||
       p.product_id != null
     );
+
+    const sharedSongData = useMemo(() => {
+      if (!isSharedSong) return null;
+      const target = p.shared_song || originalPost || p;
+      const coverUrl =
+        target.cover_image_url ||
+        target.song_cover_image_url ||
+        target.cover_url ||
+        target.cover ||
+        p.song_cover_image_url ||
+        p.cover_image_url ||
+        'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+      const audioUrl = target.audio_url || p.audio_url || '';
+      const title = target.song_title || target.title || p.song_title || 'Untitled Track';
+      const artist = target.song_artist_name || target.artist_name || target.artist || ownerAuthor?.name || 'Artist';
+      const duration = target.song_duration_seconds || target.duration_seconds || p.song_duration_seconds;
+      const songId = Number(target.song_id || target.song_id2 || target.id || p.song_id2 || p.song_id || p.id || 0);
+
+      return {
+        id: songId,
+        song_id: songId,
+        title,
+        artist_name: artist,
+        artist,
+        url: audioUrl,
+        album_name: target.song_album_name || target.album_name || p.song_album_name,
+        cover_image_url: coverUrl,
+        cover: coverUrl,
+        audio_url: audioUrl,
+        duration_seconds: duration,
+        genre: target.song_genre || target.genre || p.song_genre,
+        type: 'music' as const,
+        uploader_id: target.uploader_id || target.user_id || ownerAuthor?.id,
+      };
+    }, [isSharedSong, p, originalPost, ownerAuthor]);
 
     const origPriceRaw = originalPost?.price ?? originalPost?.discount_price ?? originalPost?.main_price ?? null;
     const origPrice = origPriceRaw != null
@@ -6905,7 +6982,7 @@ export const Post = memo(
                       {isSharedPost ? (
                         <>
                           <span className="text-[#38BDF8] font-medium">
-                            {isSharedProduct ? 'shared a product' : 'shared a post'}
+                            {isSharedSong ? 'shared a song' : isSharedProduct ? 'shared a product' : 'shared a post'}
                           </span>
                           <span>•</span>
                           <span>{createdAtLabel}</span>
@@ -6978,6 +7055,8 @@ export const Post = memo(
                       ? 'product'
                       : isGroupPost
                       ? 'group_post'
+                      : isMusic
+                      ? 'song'
                       : 'post',
                     title: p.title || productData?.title,
                     description: p.description || p.content || productData?.description,
@@ -7127,7 +7206,7 @@ export const Post = memo(
                     </div>
 
                     {/* Product Title if shared product */}
-                    {originalPost.title && (
+                    {originalPost.title && !isSharedSong && (
                       <div className="px-3 md:px-3.5 pt-3 pb-0.5">
                         <h4 className="font-bold text-[#F8FAFC] text-[18px] sm:text-[19px] leading-snug">
                           {originalPost.title}
@@ -7136,7 +7215,7 @@ export const Post = memo(
                     )}
 
                     {/* Owner Description / Content */}
-                    {(originalPost.description || originalPost.content) && (
+                    {!isSharedSong && (originalPost.description || originalPost.content) && (
                       <div className="p-3 md:p-3.5 text-[#F8FAFC]">
                         <ExpandableRichText
                           text={originalPost.description || originalPost.content}
@@ -7150,7 +7229,7 @@ export const Post = memo(
                     )}
 
                     {/* Owner Media */}
-                    {origMediaInfo && origMediaInfo.urls.length > 0 && (
+                    {!isSharedSong && origMediaInfo && origMediaInfo.urls.length > 0 && (
                       <div className="w-full bg-black">
                         {origMediaInfo.isVideo ? (
                           <div
@@ -7218,22 +7297,161 @@ export const Post = memo(
                       </div>
                     )}
 
-                    {/* Owner Audio Preview if audio post */}
-                    {(originalPost.song_url || originalPost.audio_url || originalPost.item_type === 'music' || originalPost.item_type === 'song') && (
-                      <div className="p-3 border-t border-[#1E293B] bg-[#0B1120] flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-[#1877F2]/20 flex items-center justify-center text-[#1877F2]">
-                            <i className="fas fa-music"></i>
+                    {/* Shared Song Card: Cover + Centered Play Button + Track Details & Action */}
+                    {isSharedSong && sharedSongData && (
+                      <div className="border-t border-[#1E293B] bg-[#0A101F]">
+                        <div
+                          className="relative group cursor-pointer overflow-hidden bg-slate-950/70"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onOpenAudio) onOpenAudio(sharedSongData);
+                            else if (onPlayAudioTrack) onPlayAudioTrack(sharedSongData);
+                          }}
+                        >
+                          {/* Song Cover Art with Play Button Overlay */}
+                          <div className="w-full aspect-[16/9] sm:aspect-[2/1] max-h-[320px] relative overflow-hidden bg-black/60 flex items-center justify-center">
+                            <img
+                              src={sharedSongData.cover_image_url}
+                              alt={sharedSongData.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src =
+                                  'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+                              }}
+                            />
+                            {/* Ambient Gradient */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-[#0A101F] via-black/35 to-transparent" />
+
+                            {/* Centered Large Play Button Overlay */}
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <button
+                                type="button"
+                                aria-label="Play song"
+                                className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#1877F2]/90 hover:bg-[#1877F2] text-white flex items-center justify-center shadow-xl shadow-[#1877F2]/40 backdrop-blur-sm transform group-hover:scale-110 active:scale-95 transition-all cursor-pointer border-2 border-white/20"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (onOpenAudio) onOpenAudio(sharedSongData);
+                                  else if (onPlayAudioTrack) onPlayAudioTrack(sharedSongData);
+                                }}
+                              >
+                                <i className="fas fa-play text-2xl sm:text-3xl ml-1 text-white" />
+                              </button>
+                            </div>
+
+                            {/* Genre / Duration badge on cover */}
+                            {(sharedSongData.genre || sharedSongData.duration_seconds) && (
+                              <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                                {sharedSongData.genre && (
+                                  <span className="bg-black/70 backdrop-blur-md text-white/90 text-xs px-2.5 py-1 rounded-full font-semibold border border-white/10">
+                                    {sharedSongData.genre}
+                                  </span>
+                                )}
+                                {sharedSongData.duration_seconds ? (
+                                  <span className="bg-black/70 backdrop-blur-md text-white/90 text-xs px-2.5 py-1 rounded-full font-mono font-medium border border-white/10">
+                                    {Math.floor(sharedSongData.duration_seconds / 60)}:
+                                    {String(sharedSongData.duration_seconds % 60).padStart(2, '0')}
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
                           </div>
-                          <div>
-                            <div className="text-[15px] font-bold text-[#F8FAFC]">
+
+                          {/* Song Info Bar with Play Button */}
+                          <div className="p-3 sm:p-3.5 flex items-center justify-between gap-3 border-t border-[#1E293B]/70 bg-[#0B1120]">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-[#1E293B] shadow-sm bg-black/40">
+                                <img
+                                  src={sharedSongData.cover_image_url}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src =
+                                      'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+                                  }}
+                                />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-[16px] sm:text-[17px] font-bold text-[#F8FAFC] truncate">
+                                  {sharedSongData.title}
+                                </div>
+                                <div className="text-[13px] sm:text-[14px] text-[#94A3B8] truncate flex items-center gap-1.5">
+                                  <span>{sharedSongData.artist_name}</span>
+                                  {sharedSongData.album_name && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="truncate">{sharedSongData.album_name}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Play Button */}
+                            <button
+                              type="button"
+                              className="bg-[#1877F2] hover:bg-[#166FE5] active:scale-95 text-white font-bold px-4 sm:px-5 py-2 rounded-xl text-[14px] sm:text-[15px] shrink-0 flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onOpenAudio) onOpenAudio(sharedSongData);
+                                else if (onPlayAudioTrack) onPlayAudioTrack(sharedSongData);
+                              }}
+                            >
+                              <i className="fas fa-play text-xs text-white" />
+                              <span>Play</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Owner Audio Preview if regular audio post (non-sharedSong) */}
+                    {!isSharedSong && (originalPost.song_url || originalPost.audio_url || originalPost.item_type === 'music' || originalPost.item_type === 'song') && (
+                      <div className="p-3 border-t border-[#1E293B] bg-[#0B1120] flex items-center justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-[#1E293B] bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
+                            {originalPost.cover_image_url || originalPost.song_cover_image_url ? (
+                              <img
+                                src={originalPost.cover_image_url || originalPost.song_cover_image_url}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <i className="fas fa-music text-lg"></i>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[15px] font-bold text-[#F8FAFC] truncate">
                               {originalPost.song_title || originalPost.title || 'Audio Track'}
                             </div>
-                            <div className="text-[13px] text-[#94A3B8]">
+                            <div className="text-[13px] text-[#94A3B8] truncate">
                               {originalPost.artist_name || originalPost.author_name || 'Music'}
                             </div>
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          className="bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold px-4 py-2 rounded-xl text-[14px] shrink-0 flex items-center gap-1.5 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const trk: any = {
+                              id: originalPost.song_id || originalPost.id,
+                              title: originalPost.song_title || originalPost.title || 'Audio Track',
+                              artist: originalPost.artist_name || originalPost.author_name || 'Music',
+                              artist_name: originalPost.artist_name || originalPost.author_name || 'Music',
+                              url: originalPost.audio_url || originalPost.song_url || '',
+                              audio_url: originalPost.audio_url || originalPost.song_url,
+                              cover: originalPost.cover_image_url || originalPost.song_cover_image_url,
+                              cover_image_url: originalPost.cover_image_url || originalPost.song_cover_image_url,
+                              type: 'music',
+                            };
+                            if (onOpenAudio) onOpenAudio(trk);
+                            else if (onPlayAudioTrack) onPlayAudioTrack(trk);
+                          }}
+                        >
+                          <i className="fas fa-play text-xs" />
+                          <span>Play</span>
+                        </button>
                       </div>
                     )}
                   </>

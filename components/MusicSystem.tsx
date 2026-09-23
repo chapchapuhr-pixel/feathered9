@@ -13,7 +13,7 @@ import {
 } from '../utils/dataCache';
 import { CommentActionModal, useCommentLongPress } from './CommentActionModal';
 import { PostMenu } from './Post/PostMenu';
-import { apiFetch } from '../utils/api';
+import { apiFetch, shareSong } from '../utils/api';
 
 /* =========================================================
    CONSTANTS & DEFAULTS
@@ -1155,12 +1155,11 @@ const ShareBottomSheet: React.FC<{
       return;
     }
     try {
-      const endpoint = `/api/songs/${track.id}/share`;
-      
-      const response = await apiJson<any>(endpoint, {
-        method: 'POST',
-        body: JSON.stringify({ user_id: currentUser.id, destination }),
-      });
+      const response = await shareSong(
+        Number(track.id),
+        Number(currentUser.id),
+        (destination as any) || 'feed'
+      );
 
       if (response.success) {
         if (onShareComplete) {

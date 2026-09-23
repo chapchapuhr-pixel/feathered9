@@ -239,3 +239,27 @@ export async function shareProduct(
   return res.json();
 }
 
+/**
+ * Share a song to feed, story, message, copy_link, group, or external. Calls POST /api/songs/:id/share.
+ */
+export async function shareSong(
+  songId: number,
+  userId: number,
+  destination: "feed" | "story" | "message" | "copy_link" | "group" | "external" = "feed",
+  message?: string
+) {
+  const res = await fetch(`/api/songs/${songId}/share`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-user-id": String(userId),
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      destination,
+      ...(message ? { message } : {}),
+    }),
+  });
+  return res.json();
+}
+
