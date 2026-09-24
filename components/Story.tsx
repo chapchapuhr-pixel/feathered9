@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 
 // -------------------- ADDED: Import ranking utility --------------------
 import { rankStoriesForReel } from '../utils/ranking';
-import { apiFetch, avatarFrom, formatRelativeTime, RichText } from './Feed';
+import { apiFetch, avatarFrom, formatRelativeTime, RichText, ReactionsSheet } from './Feed';
 
 // -------------------- ADDED: Import filters --------------------
 import Filters, { 
@@ -50,13 +50,13 @@ type NativeMediaMeta = {
 // -------------------- STORY COMMENTS CACHE --------------------
 const storyCommentsCache = new Map<number, any[]>();
 
-const setStoryCommentsCache = (storyId: number, comments: any[]) => {
+export const setStoryCommentsCache = (storyId: number, comments: any[]) => {
   const arr = Array.isArray(comments) ? comments : [];
   storyCommentsCache.set(Number(storyId), arr);
   setCachedComments('story', storyId, arr);
 };
 
-const getStoryCommentsCache = (storyId: number) => {
+export const getStoryCommentsCache = (storyId: number) => {
   const inMem = storyCommentsCache.get(Number(storyId));
   if (inMem && inMem.length > 0) return inMem;
   const stored = getCachedComments('story', storyId);
@@ -1252,7 +1252,7 @@ interface StoryViewerProps {
   onReply?: (storyId: number, text: string) => void;
   onLike?: (storyId: number) => void;
   onReaction?: (storyId: number, reaction: string) => void;
-  onShare?: (storyId: number) => void;
+  onShare?: (storyOrId: any) => void;
   onComment?: (storyId: number) => void;
   onFetchReactions?: (storyId: number) => Promise<{ reactions: any[]; counts: Record<string, number> }>;
   
@@ -1315,6 +1315,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
   const [downloadingStory, setDownloadingStory] = useState(false);
   
   const [showReactions, setShowReactions] = useState(false);
+  const [showReactionsSheet, setShowReactionsSheet] = useState(false);
   const [userReaction, setUserReaction] = useState<string | null>(
     story.my_reaction ?? story.views?.find(v => v.user_id === currentUser?.id)?.reaction ?? null
   );
@@ -1360,10 +1361,26 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
     id: Number(story.user_id) || 0,
   });
 
-  // Update comment count when story changes
+  // Update comment count and fetch real-time comments when story changes
   useEffect(() => {
-    setCommentCount(Number((story as any).comments_count || (story as any).discussions_count || 0));
-  }, [story.id, (story as any).comments_count, (story as any).discussions_count]);
+    const initialCount = Number((story as any).comments_count || (story as any).discussions_count || 0);
+    setCommentCount(initialCount);
+
+    if (!story.id) return;
+    const cached = getStoryCommentsCache(story.id);
+    if (cached) {
+      setCommentCount(cached.length);
+    }
+    const viewerParam = currentUser?.id ? `?viewerId=${currentUser.id}` : '';
+    apiFetch(`/api/stories/${story.id}/comments${viewerParam}`, {
+      headers: currentUser?.id ? { 'x-user-id': String(currentUser.id) } : undefined,
+    }).then((data: any) => {
+      const list = Array.isArray(data?.comments) ? data.comments : (Array.isArray(data) ? data : []);
+      const count = typeof data?.count === 'number' ? data.count : list.length;
+      setCommentCount(count);
+      setStoryCommentsCache(story.id, list);
+    }).catch(() => {});
+  }, [story.id, (story as any).comments_count, (story as any).discussions_count, currentUser?.id]);
 
   const getDisplayMediaUrl = useCallback((story: StoryType): string => {
     const meta = story.media_meta?.[0];
@@ -1967,33 +1984,35 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
   }, [isPaused, storyIsVideo, muted, story.music_url]);
 
   const handleShare = () => {
+    setIsPaused(true);
     if (onShare) {
-      onShare(story.id);
-      setShareCount(prev => prev + 1);
-      setIsPaused(false);
-      
-      const toast = document.createElement('div');
-      toast.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 bg-[#1877F2] text-white px-6 py-2 rounded-full font-bold shadow-lg animate-fade-in z-[300]';
-      toast.innerText = 'Story shared!';
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 2000);
+      onShare(story);
     }
   };
 
   const handleComment = () => {
+    setIsPaused(true);
     if (onComment) {
       onComment(story.id);
-      setIsPaused(false);
     }
   };
 
-  const handleReactionClick = () => {
+  const handleReactionClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) {
+      alert('Please login to react to stories.');
+      return;
+    }
     if (!isAuthor) {
       setShowReactions(!showReactions);
     }
   };
 
   const handleReaction = async (reaction: string) => {
+    if (!currentUser) {
+      alert('Please login to react to stories.');
+      return;
+    }
     if (!onReaction || isAuthor) return;
 
     const wasPaused = isPaused;
@@ -2060,6 +2079,21 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
   } : null;
 
   const displayMediaUrl = getDisplayMediaUrl(story);
+
+  const normalizedStoryPost = useMemo(() => ({
+    ...story,
+    id: story.id,
+    story_id: story.id,
+    item_type: 'story',
+    type: 'story',
+    post_type: 'story',
+    shares: shareCount,
+    shares_count: shareCount,
+    reactions_count: reactionCount,
+    comments_count: commentCount,
+    author: user?.name || (story as any).author_name || 'Creator',
+    user: user,
+  }), [story, user, shareCount, reactionCount, commentCount]);
 
   return (
     <div className="fixed inset-0 z-[250] bg-[#050B18] animate-fade-in flex items-center justify-center">
@@ -2361,26 +2395,29 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
           className="absolute bottom-0 left-0 right-0 p-3 pb-[max(env(safe-area-inset-bottom,0px),12px)] z-20 bg-gradient-to-t from-[#0B1120] via-[#0B1120]/80 to-transparent pt-10"
           data-no-nav="true"
         >
-          {/* Reaction row with counts */}
-          {reactionCount > 0 && (
+          {/* Reaction and discussion row with counts */}
+          {(reactionCount > 0 || commentCount > 0 || shareCount > 0) && (
             <div 
               className="flex items-center justify-between px-2 mb-2 cursor-pointer"
               onClick={() => {
-                console.log('Open reactions sheet');
+                setShowReactionsSheet(true);
+                setIsPaused(true);
               }}
             >
               <div className="flex items-center gap-2">
-                <div className="flex -space-x-2">
-                  {topReactionEmojis.slice(0, 2).map((emoji, i) => (
-                    <span
-                      key={i}
-                      className="w-[22px] h-[22px] rounded-full bg-[#0F172A] border border-[#1E293B] flex items-center justify-center text-[14px]"
-                      style={{ zIndex: 10 - i }}
-                    >
-                      {emoji}
-                    </span>
-                  ))}
-                </div>
+                {reactionCount > 0 && (
+                  <div className="flex -space-x-2">
+                    {topReactionEmojis.slice(0, 2).map((emoji, i) => (
+                      <span
+                        key={i}
+                        className="w-[22px] h-[22px] rounded-full bg-[#0F172A] border border-[#1E293B] flex items-center justify-center text-[14px]"
+                        style={{ zIndex: 10 - i }}
+                      >
+                        {emoji}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {reactionText && (
                   <span className="text-[15px] text-white font-bold">
                     {reactionText}
@@ -2388,9 +2425,11 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
                 )}
               </div>
               <div className="flex gap-3 text-white/60 text-[13px]">
-                <span className="hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); handleComment(); }}>
-                  {fmtCount(commentCount)} {commentCount === 1 ? 'Discussion' : 'Discussions'}
-                </span>
+                {commentCount > 0 && (
+                  <span className="hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); handleComment(); }}>
+                    {fmtCount(commentCount)} {commentCount === 1 ? 'Discussion' : 'Discussions'}
+                  </span>
+                )}
                 {shareCount > 0 && (
                   <span className="hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); handleShare(); }}>
                     {fmtCount(shareCount)} {shareCount === 1 ? 'Share' : 'Shares'}
@@ -2608,6 +2647,24 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({
               </div>
             </div>
           </div>
+        )}
+
+        {/* Reactions Sheet for Story */}
+        {showReactionsSheet && (
+          <ReactionsSheet
+            isOpen={showReactionsSheet}
+            onClose={() => {
+              setShowReactionsSheet(false);
+              setIsPaused(false);
+            }}
+            post={normalizedStoryPost}
+            onProfileClick={onProfileClick || (() => {})}
+            onOpenComments={() => {
+              setShowReactionsSheet(false);
+              handleComment();
+            }}
+            currentUser={currentUser}
+          />
         )}
       </div>
     </div>
@@ -3907,7 +3964,7 @@ interface StoryViewerModalProps {
   onReply?: (storyId: number, text: string) => void;
   onLike?: (storyId: number) => void;
   onReaction?: (storyId: number, reaction: string) => void;
-  onShare?: (storyId: number) => void;
+  onShare?: (storyOrId: any) => void;
   onComment?: (storyId: number) => void;
   muted?: boolean;
   onToggleMute?: () => void;
@@ -4060,7 +4117,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = (props) => {
   const handleReply = (storyId: number, text: string) => onReply?.(storyId, text);
   const handleLike = (storyId: number) => onLike?.(storyId);
   const handleReaction = (storyId: number, reaction: string) => onReaction?.(storyId, reaction);
-  const handleShare = (storyId: number) => onShare?.(storyId);
+  const handleShare = (storyOrId: any) => onShare?.(storyOrId || activeStory);
   const handleComment = (storyId: number) => onComment?.(storyId);
 
   const isFollowing = modalUser.id && checkIsFollowing ? checkIsFollowing(Number(modalUser.id)) : false;

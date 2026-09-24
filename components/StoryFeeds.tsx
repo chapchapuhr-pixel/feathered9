@@ -21,7 +21,8 @@ import {
   Share2,
 } from 'lucide-react';
 import { Story, User, ReactionType } from '../types';
-import { ReactionButton, ShareBottomSheet, ReactionsSheet } from './Feed';
+import { ReactionButton, ShareBottomSheet, ReactionsSheet, apiFetch } from './Feed';
+import { getStoryCommentsCache, setStoryCommentsCache } from './Story';
 import { VerifiedBadge } from './VerifiedBadge';
 
 interface StoryFeedsProps {
@@ -657,11 +658,31 @@ function StoryFeedCard({
     };
   }, [story, storyId, authorId, authorName, authorImage, authorUsername]);
 
-  const commentsCount =
-    (story as any).comments_count ??
-    (story as any).comments?.length ??
-    (story as any).discussions_count ??
-    0;
+  const [commentsCount, setCommentsCount] = useState<number>(() => {
+    const cached = getStoryCommentsCache(storyId);
+    if (cached) return cached.length;
+    return Number((story as any).comments_count ?? (story as any).comments?.length ?? (story as any).discussions_count ?? 0);
+  });
+
+  useEffect(() => {
+    const initial = Number((story as any).comments_count ?? (story as any).comments?.length ?? (story as any).discussions_count ?? 0);
+    setCommentsCount(initial);
+
+    if (!storyId) return;
+    const cached = getStoryCommentsCache(storyId);
+    if (cached) {
+      setCommentsCount(cached.length);
+    }
+    const viewerParam = currentUser?.id ? `?viewerId=${currentUser.id}` : '';
+    apiFetch(`/api/stories/${storyId}/comments${viewerParam}`, {
+      headers: currentUser?.id ? { 'x-user-id': String(currentUser.id) } : undefined,
+    }).then((data: any) => {
+      const list = Array.isArray(data?.comments) ? data.comments : (Array.isArray(data) ? data : []);
+      const count = typeof data?.count === 'number' ? data.count : list.length;
+      setCommentsCount(count);
+      setStoryCommentsCache(storyId, list);
+    }).catch(() => {});
+  }, [storyId, (story as any).comments_count, (story as any).comments?.length, (story as any).discussions_count, currentUser?.id]);
 
   // Dropdown options
   const [showMenu, setShowMenu] = useState(false);
@@ -1305,6 +1326,8 @@ function StoryGridCard({
           </span>
           <span className="text-[10px] text-white/70 truncate">
             {story.reactions_count || 0} reactions
+            {Number((story as any).comments_count || (story as any).discussions_count || 0) > 0 &&
+              ` · ${Number((story as any).comments_count || (story as any).discussions_count || 0)} discussions`}
           </span>
         </div>
       </div>
