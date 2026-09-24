@@ -690,8 +690,11 @@ export const StoryCommentsSheet: React.FC<StoryCommentsSheetProps> = ({
     }
     setLoading(true);
     try {
-      const data = await apiFetch(`/api/stories/${storyId}/comments?limit=100`);
-      const commentsList = Array.isArray(data?.comments) ? data.comments : [];
+      const viewerParam = currentUser?.id ? `?viewerId=${currentUser.id}` : '';
+      const data = await apiFetch(`/api/stories/${storyId}/comments${viewerParam}`, {
+        headers: currentUser?.id ? { 'x-user-id': String(currentUser.id) } : undefined,
+      });
+      const commentsList = Array.isArray(data?.comments) ? data.comments : (Array.isArray(data) ? data : []);
       setComments(commentsList);
       setStoryCommentsCache(storyId, commentsList);
       onCountChange?.(commentsList.length);
@@ -700,7 +703,7 @@ export const StoryCommentsSheet: React.FC<StoryCommentsSheetProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [storyId, onCountChange]);
+  }, [storyId, currentUser, onCountChange]);
 
   useEffect(() => {
     if (isOpen && storyId) {
@@ -752,9 +755,14 @@ export const StoryCommentsSheet: React.FC<StoryCommentsSheetProps> = ({
     try {
       const data = await apiFetch(`/api/stories/${storyId}/comments`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
         body: JSON.stringify({
           user_id: currentUser.id,
           content: finalText,
+          image_url: null,
           parent_id: parentId,
         }),
       });
@@ -879,6 +887,10 @@ export const StoryCommentsSheet: React.FC<StoryCommentsSheetProps> = ({
     try {
       await apiFetch(`/api/stories/${storyId}/comments`, {
         method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
         body: JSON.stringify({
           user_id: currentUser.id,
           comment_id: commentId,
@@ -908,6 +920,9 @@ export const StoryCommentsSheet: React.FC<StoryCommentsSheetProps> = ({
     try {
       await apiFetch(`/api/stories/${storyId}/comments?comment_id=${cid}&user_id=${currentUser.id}`, {
         method: 'DELETE',
+        headers: {
+          'x-user-id': String(currentUser.id),
+        },
       });
     } catch (error) {
       console.error('Failed to delete comment:', error);

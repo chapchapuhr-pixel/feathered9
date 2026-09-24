@@ -1234,6 +1234,16 @@ const getFeedItemType = (item: any): string => {
   const meta = item?.meta || {};
   
   if (
+    item?.source === 'story' ||
+    item?.item_type === 'story' ||
+    item?.type === 'story' ||
+    item?.post_type === 'story' ||
+    meta?.kind === 'story' ||
+    meta?.type === 'story' ||
+    !!item?.story_id
+  ) return 'story';
+
+  if (
     item?.source === 'sponsored' ||
     item?.item_type === 'sponsored' ||
     item?.type === 'sponsored' ||
@@ -1455,12 +1465,14 @@ export const ReactionsSheet = memo(
     post,
     onProfileClick,
     onOpenComments,
+    currentUser,
   }: {
     isOpen: boolean;
     onClose: () => void;
     post: PostType;
     onProfileClick: (id: number) => void;
     onOpenComments?: (post: PostType) => void;
+    currentUser?: User | null;
   }) => {
     const postId = getFeedItemId(post);
     const [loading, setLoading] = useState(false);
@@ -1481,7 +1493,11 @@ export const ReactionsSheet = memo(
         try {
           const it = getFeedItemType(post);
           let reactionsEndpoint = `/api/posts/${postId}/reactions?limit=500&offset=0`;
-          if (it === 'music' || it === 'song') {
+          if (it === 'story') {
+            const viewerId = (currentUser as any)?.id || (post as any)?.viewer_id;
+            const viewerParam = viewerId ? `?viewerId=${viewerId}` : '';
+            reactionsEndpoint = `/api/stories/${postId}/reactions${viewerParam}`;
+          } else if (it === 'music' || it === 'song') {
             reactionsEndpoint = `/api/songs/${postId}/reactions`;
           } else if (it === 'product') {
             reactionsEndpoint = `/api/products/${postId}/reactions`;
@@ -1490,6 +1506,7 @@ export const ReactionsSheet = memo(
           }
           const data = await apiFetch(reactionsEndpoint, {
             signal: abortRef.current?.signal as any,
+            headers: (currentUser as any)?.id ? { 'x-user-id': String((currentUser as any).id) } : undefined,
           } as any);
           const arr = Array.isArray(data?.reactions) ? data.reactions : [];
           setItems(arr);
@@ -1951,6 +1968,8 @@ export const ShareBottomSheet = memo(
       const itemType = getFeedItemType(post);
       const itemId = Number(post?.id ?? post?.post_id ?? getFeedItemId(post) ?? 0);
       switch (itemType) {
+        case 'story':
+          return `/api/stories/${itemId}/share`;
         case 'event':
           return post?.event_id ? `/api/events/${post.event_id}/share` : `/api/events/${itemId}/share`;
         case 'group_post':
@@ -1981,6 +2000,12 @@ export const ShareBottomSheet = memo(
       };
       
       switch (itemType) {
+        case 'story':
+          return {
+            user_id: currentUser?.id,
+            destination: destination,
+            message: shareMessage || undefined,
+          };
         case 'event':
           return { ...base, event_id: itemId };
         case 'group_post':
@@ -2043,25 +2068,28 @@ export const ShareBottomSheet = memo(
       try {
         const endpoint = getShareEndpoint();
         const msg = customMessage !== undefined ? customMessage : shareMessage;
-        const payload = {
-          ...getSharePayload(destination),
-          message: msg,
-          feeling: feeling || undefined,
-          location: location || undefined,
-          taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
-          audience: audience,
-        };
+        const itemType = getFeedItemType(post);
+        const payload = itemType === 'story'
+          ? {
+              user_id: currentUser.id,
+              destination: destination || 'feed',
+              message: msg || undefined,
+            }
+          : {
+              ...getSharePayload(destination),
+              message: msg,
+              feeling: feeling || undefined,
+              location: location || undefined,
+              taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
+              audience: audience,
+            };
         const response = await apiFetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'x-user-id': String(currentUser.id),
           },
-          body: JSON.stringify({
-            ...payload,
-            user_id: currentUser.id,
-            destination: destination || 'feed',
-          }),
+          body: JSON.stringify(payload),
         });
         if (onShareComplete) {
           const nextShares = safeNumber(
@@ -2912,9 +2940,32 @@ export const isReelPost = (item: any): boolean => {
 interface FeedStoryCardProps {
   story: any;
   onOpen?: (story: any) => void;
+  currentUser?: User | null;
+  users?: User[];
+  groups?: Group[];
+  brands?: Brand[];
+  chats?: any[];
+  onReact?: (storyId: number, type: ReactionType) => void;
+  onOpenComments?: (story: any) => void;
+  onShare?: (story: any) => void;
+  onProfileClick?: (userId: number) => void;
 }
 
-const FeedStoryCard: React.FC<FeedStoryCardProps> = ({ story, onOpen }) => {
+const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
+  story,
+  onOpen,
+  currentUser,
+  users = [],
+  groups = [],
+  brands = [],
+  chats = [],
+  onReact,
+  onOpenComments,
+  onShare,
+  onProfileClick,
+}) => {
+  const storyId = Number(story?.id || story?.story_id || 0);
+  const authorId = Number(story?.user_id || story?.user?.id || 0);
   const authorName = getStoryAuthorName(story);
   const authorImage = getStoryAuthorImage(story);
 
@@ -2940,32 +2991,152 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({ story, onOpen }) => {
     displayMediaUrl;
 
   const viewsCount = Number(story?.views_count || 0);
-  const reactionsCount = Number(story?.reactions_count || 0);
+
+  const [currentReaction, setCurrentReaction] = useState<ReactionType | undefined>(
+    story?.my_reaction || (story?.liked_by_me ? 'like' : undefined)
+  );
+  const [reactionCount, setReactionCount] = useState<number>(
+    Number(story?.reactions_count || story?.reactions?.length || 0)
+  );
+  const [commentsCount, setCommentsCount] = useState<number>(
+    Number(story?.comments_count ?? story?.comments?.length ?? story?.discussions_count ?? 0)
+  );
+  const [sharesCount, setSharesCount] = useState<number>(
+    Number(story?.shares_count ?? story?.shares ?? 0)
+  );
+
+  const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showReactionsSheet, setShowReactionsSheet] = useState(false);
+
+  useEffect(() => {
+    if (story?.my_reaction !== undefined) {
+      setCurrentReaction(story.my_reaction || (story.liked_by_me ? 'like' : undefined));
+    }
+    if (story?.reactions_count !== undefined) {
+      setReactionCount(Number(story.reactions_count));
+    }
+    if (story?.comments_count !== undefined) {
+      setCommentsCount(Number(story.comments_count));
+    }
+    if (story?.shares_count !== undefined) {
+      setSharesCount(Number(story.shares_count));
+    }
+  }, [story?.my_reaction, story?.liked_by_me, story?.reactions_count, story?.comments_count, story?.shares_count]);
+
+  const normalizedStoryPost = useMemo(() => {
+    return {
+      ...story,
+      id: storyId,
+      story_id: storyId,
+      item_type: 'story',
+      type: 'story',
+      post_type: 'story',
+      shares: sharesCount,
+      shares_count: sharesCount,
+      author: authorName,
+      author_name: authorName,
+      author_image: authorImage,
+      user: story?.user || {
+        id: authorId,
+        name: authorName,
+        username: story?.author_username || story?.username || 'creator',
+        profile_image_url: authorImage,
+      },
+    };
+  }, [story, storyId, authorId, authorName, authorImage, sharesCount]);
+
+  const handleReact = async (type: ReactionType) => {
+    if (!currentUser) {
+      alert('Please login to react.');
+      return;
+    }
+
+    const isSameReaction = currentReaction === type;
+    const nextReaction = isSameReaction ? undefined : type;
+    const nextCount = isSameReaction
+      ? Math.max(0, reactionCount - 1)
+      : currentReaction
+      ? reactionCount
+      : reactionCount + 1;
+
+    setCurrentReaction(nextReaction);
+    setReactionCount(nextCount);
+
+    if (onReact) {
+      onReact(storyId, type);
+    }
+
+    try {
+      await fetch(`/api/stories/${storyId}/react`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          type: type,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to react to story:', err);
+    }
+  };
+
+  const handleShareClick = () => {
+    if (!currentUser) {
+      alert('Please login to share.');
+      return;
+    }
+    setShowShareSheet(true);
+  };
+
+  const handleShareComplete = (destination: string, data?: any) => {
+    const nextShares = safeNumber(data?.shares ?? data?.share_count, NaN);
+    const finalShares = Number.isFinite(nextShares) ? nextShares : sharesCount + 1;
+    setSharesCount(finalShares);
+    onShare?.(normalizedStoryPost);
+    setShowShareSheet(false);
+  };
 
   return (
     <div className="w-full bg-[#0F172A] border-b-[8px] border-[#050B18] overflow-hidden">
-      <div className="px-4 pt-3 pb-2 flex items-center gap-3">
-        <img
-          src={authorImage}
-          alt={authorName}
-          className="w-10 h-10 rounded-full object-cover border border-[#1E293B]"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="text-[#F8FAFC] font-bold text-[21px] truncate">{authorName}</p>
-            <span className="text-[#1877F2] text-[12px] font-bold">Story</span>
+      <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={() => authorId && onProfileClick?.(authorId)}
+            className="flex-shrink-0 cursor-pointer"
+          >
+            <img
+              src={authorImage}
+              alt={authorName}
+              className="w-10 h-10 rounded-full object-cover border border-[#1E293B]"
+            />
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => authorId && onProfileClick?.(authorId)}
+                className="text-[#F8FAFC] font-bold text-[21px] truncate hover:text-[#38BDF8] text-left cursor-pointer"
+              >
+                {authorName}
+              </button>
+              <span className="text-[#1877F2] text-[12px] font-bold">Story</span>
+            </div>
+            <p className="text-[#94A3B8] text-[12px]">
+              {storyLabel}
+              {viewsCount > 0 ? ` · ${viewsCount} views` : ''}
+            </p>
           </div>
-          <p className="text-[#94A3B8] text-[12px]">
-            {storyLabel}
-            {viewsCount > 0 ? ` · ${viewsCount} views` : ''}
-          </p>
         </div>
       </div>
 
       <button
         type="button"
         onClick={() => onOpen?.(story)}
-        className="block w-full text-left"
+        className="block w-full text-left cursor-pointer"
       >
         {isText ? (
           <div
@@ -3036,26 +3207,114 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({ story, onOpen }) => {
         ) : null}
       </button>
 
-      <div className="px-4 py-3 border-t border-[#1E293B] flex items-center justify-between">
-        <div className="flex items-center gap-4 text-[#94A3B8] text-sm">
+      {/* Social Feedback Bar (Reactions & Discussions Counts) */}
+      <div className="px-4 py-2 border-t border-[#1E293B] flex items-center justify-between text-[#94A3B8] text-sm">
+        <button
+          type="button"
+          onClick={() => setShowReactionsSheet(true)}
+          className="flex items-center gap-1.5 hover:text-[#F8FAFC] cursor-pointer"
+        >
           <span className="flex items-center gap-1">
-            <i className="fas fa-eye text-[13px]"></i>
-            {viewsCount}
+            <i className="fas fa-heart text-[#EF4444] text-[13px]"></i>
+            <span className="font-semibold text-[#F8FAFC]">{reactionCount}</span>
           </span>
-          <span className="flex items-center gap-1">
-            <i className="fas fa-heart text-[13px]"></i>
-            {reactionsCount}
-          </span>
+          {viewsCount > 0 && (
+            <span className="flex items-center gap-1 ml-2 text-xs text-[#94A3B8]">
+              <i className="fas fa-eye text-[12px]"></i>
+              {viewsCount}
+            </span>
+          )}
+        </button>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onOpenComments?.(normalizedStoryPost)}
+            className="hover:underline cursor-pointer text-[#CBD5E1] hover:text-[#F8FAFC] text-sm font-semibold"
+          >
+            {commentsCount} {commentsCount === 1 ? 'Discussion' : 'Discussions'}
+          </button>
+          {sharesCount > 0 && (
+            <span className="text-xs text-[#94A3B8]">
+              · {sharesCount} {sharesCount === 1 ? 'Share' : 'Shares'}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Main Action Buttons */}
+      <div className="px-3.5 py-2 border-t border-[#1E293B] flex items-center justify-between bg-[#0B1120]/60">
+        <div className="flex items-center gap-3">
+          <ReactionButton
+            currentUserReactions={currentReaction}
+            reactionCount={reactionCount}
+            onReact={handleReact}
+            isGuest={!currentUser}
+          />
+
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-[#F8FAFC] hover:text-[#38BDF8] transition-colors focus:outline-none p-1 rounded-lg hover:bg-[#1E293B]/60 cursor-pointer"
+            onClick={() => onOpenComments?.(normalizedStoryPost)}
+            aria-label="Discuss story"
+            title="Discuss"
+          >
+            <i className="far fa-comment text-[22px]"></i>
+            {commentsCount > 0 && (
+              <span className="text-[14px] font-semibold text-[#F8FAFC]">
+                {commentsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-[#F8FAFC] hover:text-[#38BDF8] transition-transform active:scale-110 focus:outline-none p-1 rounded-lg hover:bg-[#1E293B]/60 cursor-pointer"
+            onClick={handleShareClick}
+            aria-label="Share story"
+            title="Share"
+          >
+            <i className="far fa-paper-plane text-[21px]"></i>
+            {sharesCount > 0 && (
+              <span className="text-[14px] font-semibold text-[#F8FAFC]">
+                {sharesCount}
+              </span>
+            )}
+          </button>
         </div>
 
         <button
           type="button"
           onClick={() => onOpen?.(story)}
-          className="px-4 py-1.5 rounded-full bg-[#1877F2] hover:bg-[#166FE5] text-white text-xs font-bold"
+          className="px-3.5 py-1.5 rounded-full bg-[#1877F2] hover:bg-[#166FE5] text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 active:scale-95 cursor-pointer"
         >
-          View story
+          <i className="fas fa-play text-[10px]"></i>
+          <span>View story</span>
         </button>
       </div>
+
+      {/* Share Bottom Sheet for Story (Opens exactly as other posts in Feeds.tsx) */}
+      <ShareBottomSheet
+        isOpen={showShareSheet}
+        onClose={() => setShowShareSheet(false)}
+        post={normalizedStoryPost}
+        currentUser={currentUser || null}
+        users={users}
+        groups={groups}
+        brands={brands}
+        chats={chats}
+        onShareComplete={handleShareComplete}
+      />
+
+      {/* Reactions Sheet for Story */}
+      <ReactionsSheet
+        isOpen={showReactionsSheet}
+        onClose={() => setShowReactionsSheet(false)}
+        post={normalizedStoryPost}
+        onProfileClick={onProfileClick || (() => {})}
+        onOpenComments={() => onOpenComments?.(normalizedStoryPost)}
+        currentUser={currentUser}
+      />
     </div>
   );
 };
@@ -9372,6 +9631,10 @@ export const CommentsSheet = memo(
     const itemType = getFeedItemType(p);
 
     switch (itemType) {
+      case 'story': {
+        const storyId = p.story_id || p.id || postId;
+        return `/api/stories/${storyId}/comments?viewerId=${viewerId}`;
+      }
       case 'event':
         const eventId = p.event_id || p.id;
         return `/api/events/${eventId}/comments?viewerId=${viewerId}`;
@@ -9410,6 +9673,10 @@ export const CommentsSheet = memo(
     const itemType = getFeedItemType(p);
 
     switch (itemType) {
+      case 'story': {
+        const storyId = p.story_id || p.id || postId;
+        return `/api/stories/${storyId}/comments`;
+      }
       case 'event':
         const eventId = p.event_id || p.id;
         return `/api/events/${eventId}/comment`;
@@ -9939,7 +10206,16 @@ export const CommentsSheet = memo(
       const viewerId = safeUserId(currentUser);
       let arr: any[] = [];
 
-      if (itemType === 'song' || itemType === 'music') {
+      if (itemType === 'story') {
+        const storyId = p?.story_id || p?.id || postId;
+        const res = await fetch(`/api/stories/${storyId}/comments?viewerId=${viewerId}`, {
+          method: 'GET',
+          headers: { 'x-user-id': String(viewerId) },
+          signal: abortControllerRef.current.signal,
+        });
+        const data = await res.json().catch(() => null);
+        arr = Array.isArray(data?.comments) ? data.comments : (Array.isArray(data) ? data : []);
+      } else if (itemType === 'song' || itemType === 'music') {
         const res = await fetch(endpoint, {
           method: 'GET',
           headers: { 'x-user-id': String(viewerId) },
@@ -10185,7 +10461,22 @@ export const CommentsSheet = memo(
     // Actual API call: If onComment is provided, it handles the backend insertion and state sync.
     // Otherwise fallback to direct endpoint POST.
     try {
-      if (itemType === 'song' || itemType === 'music') {
+      if (itemType === 'story') {
+        const storyId = p?.story_id || p?.id || postId;
+        await fetch(`/api/stories/${storyId}/comments`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': String(safeUserId(currentUser)),
+          },
+          body: JSON.stringify({
+            user_id: safeUserId(currentUser),
+            content: finalText,
+            image_url: uploadedImageUrl || null,
+            parent_id: parentCommentId ?? null,
+          }),
+        });
+      } else if (itemType === 'song' || itemType === 'music') {
         const songId = Number(
           p?.song_id2 ||
           p?.song_id ||
@@ -11124,6 +11415,50 @@ export const Feed = memo(({
               key={`story-${item.data.id}-${index}`}
               story={item.data}
               onOpen={onOpenStory}
+              currentUser={currentUser}
+              users={users}
+              groups={groups}
+              brands={brands}
+              chats={chats}
+              onProfileClick={onProfileClick}
+              onReact={(storyId, rType) => {
+                const storyPost = {
+                  ...item.data,
+                  id: storyId,
+                  story_id: storyId,
+                  item_type: 'story',
+                  type: 'story',
+                  post_type: 'story',
+                };
+                onReact?.(storyPost as any, rType);
+              }}
+              onOpenComments={(s) => {
+                const storyPost = {
+                  ...(s || item.data),
+                  id: (s || item.data).id,
+                  story_id: (s || item.data).id,
+                  item_type: 'story',
+                  type: 'story',
+                  post_type: 'story',
+                };
+                onOpenComments(storyPost as any);
+              }}
+              onShare={(s) => {
+                const storyPost = {
+                  ...(s || item.data),
+                  id: (s || item.data).id,
+                  story_id: (s || item.data).id,
+                  item_type: 'story',
+                  type: 'story',
+                  post_type: 'story',
+                };
+                onShare(
+                  storyPost.id,
+                  safeNumber(storyPost.shares ?? storyPost.shares_count, 0),
+                  undefined,
+                  storyPost
+                );
+              }}
             />
           );
         }

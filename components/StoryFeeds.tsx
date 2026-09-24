@@ -21,7 +21,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { Story, User, ReactionType } from '../types';
-import { ReactionButton } from './Feed';
+import { ReactionButton, ShareBottomSheet, ReactionsSheet } from './Feed';
 import { VerifiedBadge } from './VerifiedBadge';
 
 interface StoryFeedsProps {
@@ -633,6 +633,30 @@ function StoryFeedCard({
     story.reactions_count || story.reactions?.length || 0
   );
 
+  const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showReactionsSheet, setShowReactionsSheet] = useState(false);
+
+  const storyId = Number(story?.id || 0);
+  const normalizedStoryPost = useMemo(() => {
+    return {
+      ...story,
+      id: storyId,
+      story_id: storyId,
+      item_type: 'story',
+      type: 'story',
+      post_type: 'story',
+      author: authorName,
+      author_name: authorName,
+      author_image: authorImage,
+      user: story?.user || {
+        id: authorId,
+        name: authorName,
+        username: authorUsername,
+        profile_image_url: authorImage,
+      },
+    };
+  }, [story, storyId, authorId, authorName, authorImage, authorUsername]);
+
   const commentsCount =
     (story as any).comments_count ??
     (story as any).comments?.length ??
@@ -704,6 +728,22 @@ function StoryFeedCard({
 
     if (onReact) {
       await onReact(story.id, type);
+    }
+
+    try {
+      await fetch(`/api/stories/${story.id}/react`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          type: type,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to react to story:', err);
     }
   };
 
@@ -1029,7 +1069,11 @@ function StoryFeedCard({
       <div className="px-3.5 md:px-4 py-2 flex items-center justify-between text-[#94A3B8] text-[14px] border-t border-[#1E293B]">
         <div className="flex items-center gap-2">
           {reactionCount > 0 ? (
-            <div className="flex items-center gap-1.5">
+            <div
+              className="flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+              onClick={() => setShowReactionsSheet(true)}
+              title="View reactions"
+            >
               <div className="flex -space-x-1.5">
                 <span className="w-5 h-5 rounded-full bg-[#1E293B] border border-[#0B1120] flex items-center justify-center text-[11px]">
                   {currentReaction && REACTION_ICONS[currentReaction]
@@ -1089,7 +1133,7 @@ function StoryFeedCard({
           </button>
           <button
             type="button"
-            className="flex items-center gap-1.5 text-[#F8FAFC] hover:text-[#38BDF8] transition-transform active:scale-110 focus:outline-none p-1 rounded-lg hover:bg-[#1E293B]/60"
+            className="flex items-center gap-1.5 text-[#F8FAFC] hover:text-[#38BDF8] transition-transform active:scale-110 focus:outline-none p-1 rounded-lg hover:bg-[#1E293B]/60 cursor-pointer"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -1097,7 +1141,11 @@ function StoryFeedCard({
                 if (onLoginClick) onLoginClick();
                 return;
               }
-              onShare?.(story);
+              if (onShare) {
+                onShare(normalizedStoryPost);
+              } else {
+                setShowShareSheet(true);
+              }
             }}
             aria-label="Share story"
             title="Share"
@@ -1115,6 +1163,26 @@ function StoryFeedCard({
           <span>View Story</span>
         </button>
       </div>
+
+      {/* Share Bottom Sheet for Story (Opens exactly as other posts in Feeds.tsx) */}
+      <ShareBottomSheet
+        isOpen={showShareSheet}
+        onClose={() => setShowShareSheet(false)}
+        post={normalizedStoryPost}
+        currentUser={currentUser}
+        users={users}
+        onShareComplete={() => setShowShareSheet(false)}
+      />
+
+      {/* Reactions Sheet for Story */}
+      <ReactionsSheet
+        isOpen={showReactionsSheet}
+        onClose={() => setShowReactionsSheet(false)}
+        post={normalizedStoryPost}
+        onProfileClick={onProfileClick || (() => {})}
+        onOpenComments={() => onComment?.(story.id)}
+        currentUser={currentUser}
+      />
     </article>
   );
 }

@@ -3231,8 +3231,11 @@ const uploadStoryVideoBundle = async (file: File) => {
 
 const fetchStoryReactions = useCallback(async (storyId: number) => {
   try {
-    const data = await apiFetch(`/api/stories/${storyId}/reactions?limit=50`);
-    const reactions = Array.isArray(data?.reactions) ? data.reactions : [];
+    const viewerParam = currentUser?.id ? `?viewerId=${currentUser.id}` : '';
+    const data = await apiFetch(`/api/stories/${storyId}/reactions${viewerParam}`, {
+      headers: currentUser?.id ? { 'x-user-id': String(currentUser.id) } : undefined,
+    });
+    const reactions = Array.isArray(data?.reactions) ? data.reactions : (Array.isArray(data) ? data : []);
     const counts = data?.counts || {};
     
     const totalCount = Object.values(counts).reduce((a: number, b: number) => a + b, 0) || reactions.length;
@@ -3248,28 +3251,39 @@ const fetchStoryReactions = useCallback(async (storyId: number) => {
     console.error('Failed to fetch story reactions:', error);
     return { reactions: [], counts: {} };
   }
-}, []);
+}, [currentUser]);
 
-const handleStoryShare = useCallback(async (storyId: number) => {
+const handleStoryShare = useCallback((storyOrId: any) => {
   if (!requireAuth('Sharing stories')) return;
   if (!currentUser) return;
 
-  try {
-    await apiFetch(`/api/stories/${storyId}/share`, {
-      method: 'POST',
-      body: JSON.stringify({ user_id: currentUser.id }),
-    });
-    
-    const toast = document.createElement('div');
-    toast.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 bg-[#1877F2] text-white px-6 py-2 rounded-full font-bold shadow-lg animate-fade-in z-[300]';
-    toast.innerText = 'Story shared!';
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2000);
-  } catch (error) {
-    console.error('Failed to share story:', error);
-    setLoginError('Failed to share story');
-  }
-}, [currentUser, requireAuth]);
+  const storyObj =
+    typeof storyOrId === 'object' && storyOrId !== null
+      ? storyOrId
+      : stories.find((s) => Number(s.id) === Number(storyOrId)) || { id: storyOrId };
+
+  const storyId = Number(storyObj.id || storyOrId);
+  const normalizedStoryPost = {
+    ...storyObj,
+    id: storyId,
+    story_id: storyId,
+    item_type: 'story',
+    type: 'story',
+    post_type: 'story',
+    shares: safeNumber(storyObj.shares ?? storyObj.shares_count, 0),
+    shares_count: safeNumber(storyObj.shares_count ?? storyObj.shares, 0),
+    author: storyObj.author_name || storyObj.user?.name || 'Creator',
+    user: storyObj.user || {
+      id: Number(storyObj.user_id || 0),
+      name: storyObj.author_name || 'Creator',
+      username: storyObj.author_username || 'creator',
+      profile_image_url: storyObj.author_image,
+    },
+  };
+
+  setActiveSharePost(normalizedStoryPost);
+  setShowShareSheet(true);
+}, [currentUser, requireAuth, stories]);
 
 // Updated: Opens the story comments modal
 const handleStoryComment = useCallback((storyId: number) => {
@@ -4986,8 +5000,13 @@ const loadMoreFeed = useCallback(async () => {
     try {
       const response = await apiFetch(`/api/stories/${storyId}/react`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
         body: JSON.stringify({ 
           user_id: currentUser.id, 
+          type: 'like',
           reaction: 'like' 
         }),
       });
@@ -5039,8 +5058,13 @@ const loadMoreFeed = useCallback(async () => {
     try {
       const response = await apiFetch(`/api/stories/${storyId}/react`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
         body: JSON.stringify({ 
           user_id: currentUser.id, 
+          type: reaction,
           reaction: reaction 
         }),
       });
@@ -9981,6 +10005,9 @@ const reactToFeedItem = useCallback(async (item: any, type: ReactionType) => {
   try {
     let endpoint = '';
     switch (itemType) {
+      case 'story':
+        endpoint = `/api/stories/${itemId}/react`;
+        break;
       case 'event':
         endpoint = `/api/events/${itemId}/react`;
         break;
@@ -10083,6 +10110,15 @@ const fetchComments = useCallback(async (item: any) => {
   try {
     let endpoint = '';
     switch (type) {
+      case 'story': {
+        const userId = currentUser?.id ? String(currentUser.id) : '0';
+        const res = await fetch(`/api/stories/${id}/comments?viewerId=${userId}`, {
+          method: 'GET',
+          headers: { 'x-user-id': String(userId) },
+        });
+        const data = await res.json().catch(() => null);
+        return safeArray(data?.comments ?? data);
+      }
       case 'event':
         endpoint = `/api/events/${id}/comments?viewerId=${currentUser?.id || 0}`;
         break;
@@ -10223,6 +10259,15 @@ const createComment = useCallback(async (
     let payload: any = {};
 
     switch (type) {
+      case 'story':
+        endpoint = `/api/stories/${id}/comments`;
+        payload = {
+          user_id: currentUser.id,
+          content: text || '',
+          parent_id: parentCommentId ?? null,
+          image_url: image_url || null,
+        };
+        break;
       case 'event':
         endpoint = `/api/events/${id}/comment`;
         payload = {
@@ -10300,7 +10345,7 @@ const createComment = useCallback(async (
     }
 
     let data: any = null;
-    if (type === 'music' || type === 'song') {
+    if (type === 'story' || type === 'music' || type === 'song') {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -10508,7 +10553,23 @@ const deleteComment = useCallback(async (commentId: number, itemOrSongId?: any) 
       0
     );
 
-    if (isSong && songId) {
+    const isStory =
+      (itemOrSongId && (itemOrSongId?.item_type === 'story' || itemOrSongId?.type === 'story' || itemOrSongId?.story_id)) ||
+      (activeCommentsIdentity?.type === 'story_post');
+    const storyId = Number(
+      itemOrSongId?.story_id ??
+      (itemOrSongId?.item_type === 'story' || itemOrSongId?.type === 'story' ? itemOrSongId?.id : null) ??
+      (commentPostSnapshot as any)?.story_id ??
+      ((commentPostSnapshot as any)?.type === 'story' ? (commentPostSnapshot as any)?.id : null) ??
+      0
+    );
+
+    if (isStory && storyId) {
+      await fetch(`/api/stories/${storyId}/comments?comment_id=${commentId}&user_id=${currentUser.id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': String(currentUser.id) },
+      });
+    } else if (isSong && songId) {
       await fetch(`/api/songs/${songId}/comments?comment_id=${commentId}&user_id=${currentUser.id}`, {
         method: 'DELETE',
         headers: { 'x-user-id': String(currentUser.id) },
@@ -10843,11 +10904,16 @@ const handleShareComplete = useCallback(
           let shareBody: any = { destination, user_id: currentUser?.id, message: data?.message };
 
           const isGroupPost = !!(targetPost?.group_id || targetPost?.item_type === 'group_post');
+          const isStory = !!(targetPost?.story_id || targetPost?.item_type === 'story' || targetPost?.type === 'story');
           const isSong = !!(targetPost?.song_id || targetPost?.song_id2 || targetPost?.item_type === 'song' || targetPost?.item_type === 'music');
           const isProduct = !!(targetPost?.product_id || targetPost?.item_type === 'product');
           const isEvent = !!(targetPost?.event_id || targetPost?.item_type === 'event');
 
-          if (isGroupPost) {
+          if (isStory) {
+            const storyId = targetPost.story_id || targetPostId;
+            shareEndpoint = `/api/stories/${storyId}/share`;
+            shareBody = { user_id: currentUser?.id, destination, message: data?.message };
+          } else if (isGroupPost) {
             shareEndpoint = `/api/groups/posts/share`;
             shareBody = { destination, post_id: targetPostId, group_id: targetPost.group_id, user_id: currentUser?.id };
           } else if (isSong) {
