@@ -1541,7 +1541,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         ) AS content,
 
         'public' AS visibility,
-        0 AS views, 0 AS shares,
+        0 AS views,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS shares,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS shares_count,
+        (SELECT COUNT(*) FROM song_shares ssh_ct WHERE ssh_ct.song_id = s.id) AS share_count,
 
         NULL AS media_url, NULL AS media_type,
         NULL AS media_urls, NULL AS media_types, NULL AS media_meta,

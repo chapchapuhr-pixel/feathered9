@@ -9961,6 +9961,7 @@ const reactToFeedItem = useCallback(async (item: any, type: ReactionType) => {
         endpoint = `/api/posts/${itemId}/react`;
         break;
       case 'music':
+      case 'song':
         endpoint = `/api/songs/${itemId}/react`;
         break;
       case 'podcast':
@@ -9987,7 +9988,8 @@ const reactToFeedItem = useCallback(async (item: any, type: ReactionType) => {
         if (!isMatch) {
           const pid = Number(p?.id);
           const peid = Number((p as any)?.event_id);
-          if ((itemId && pid === itemId) || (itemId && peid === itemId)) isMatch = true;
+          const psid = Number((p as any)?.song_id || (p as any)?.song_id2);
+          if ((itemId && pid === itemId) || (itemId && peid === itemId) || (itemId && psid === itemId)) isMatch = true;
         }
         if (!isMatch) return p;
 
@@ -10003,6 +10005,8 @@ const reactToFeedItem = useCallback(async (item: any, type: ReactionType) => {
           reactions_count: serverCount,
           reactionsCount: serverCount,
           likesCount: serverCount,
+          shares: data?.shares ?? p?.shares,
+          shares_count: data?.shares_count ?? p?.shares_count,
         };
       };
 
@@ -10059,6 +10063,7 @@ const fetchComments = useCallback(async (item: any) => {
         endpoint = `/api/posts/${id}/comments?viewerId=${currentUser?.id || 0}`;
         break;
       case 'music':
+      case 'song':
         endpoint = `/api/songs/${id}/comments?viewerId=${currentUser?.id || 0}`;
         break;
       case 'podcast':
@@ -10090,7 +10095,18 @@ const handleOpenComments = useCallback((post: PostType) => {
     postType = 'event_post';
   } else if ((post as any).reel_id || (post as any).type === 'reel') {
     postType = 'reel_post';
-  } else if ((post as any).song_id || (post as any).type === 'music') {
+  } else if (
+    (post as any).song_id ||
+    (post as any).song_id2 ||
+    (post as any).type === 'music' ||
+    (post as any).type === 'song' ||
+    (post as any).item_type === 'music' ||
+    (post as any).item_type === 'song' ||
+    (post as any).source === 'song' ||
+    (post as any).source === 'music' ||
+    (post as any).song_title ||
+    ((post as any).audio_url && !(post as any).podcast_id)
+  ) {
     postType = 'music_post';
   }
   
@@ -10196,6 +10212,25 @@ const createComment = useCallback(async (
           image_url: image_url || '',
         };
         break;
+      case 'music':
+      case 'song':
+        endpoint = `/api/songs/${id}/comment`;
+        payload = {
+          user_id: currentUser.id,
+          text: text || '',
+          parent_comment_id: parentCommentId ?? null,
+          image_url: image_url || '',
+        };
+        break;
+      case 'podcast':
+        endpoint = `/api/podcasts/${id}/comments`;
+        payload = {
+          user_id: currentUser.id,
+          text: text || '',
+          parent_comment_id: parentCommentId ?? null,
+          image_url: image_url || '',
+        };
+        break;
       default:
         endpoint = `/api/posts/${id}/comments`;
         payload = {
@@ -10242,6 +10277,10 @@ const createComment = useCallback(async (
       case 'reel':
         newComment.reel_id = id;
         break;
+      case 'music':
+      case 'song':
+        newComment.song_id = id;
+        break;
       default:
         newComment.post_id = id;
     }
@@ -10256,14 +10295,15 @@ const createComment = useCallback(async (
         if (!isMatch) {
           const pid = Number(post?.id);
           const peid = Number((post as any)?.event_id);
-          if ((id && pid === id) || (id && peid === id)) isMatch = true;
+          const psid = Number((post as any)?.song_id || (post as any)?.song_id2);
+          if ((id && pid === id) || (id && peid === id) || (id && psid === id)) isMatch = true;
         }
         if (!isMatch) return post;
         
         const existingComments = safeArray((post as any).comments);
         const alreadyExists = existingComments.some((c: any) => String(c?.id) === String(newComment.id));
         if (alreadyExists) return post;
-        const nextCount = safeNumber((post as any).comments_count) + 1;
+        const nextCount = data?.comments_count != null ? safeNumber(data.comments_count) : safeNumber((post as any).comments_count) + 1;
         return {
           ...post,
           comments: [newComment, ...existingComments],

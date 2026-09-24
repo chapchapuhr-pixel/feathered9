@@ -98,9 +98,17 @@ export const onRequestGet: PagesFunction = async ({ request, env, params }) => {
     const commentsCountRow = await env.DB.prepare(
       `SELECT COUNT(*) AS count
        FROM song_comments
-       WHERE song_id = ?`
+       WHERE song_id = ? AND COALESCE(is_deleted, 0) = 0`
     ).bind(songId).first();
     const commentsCount = toNum((commentsCountRow as any)?.count, 0);
+
+    // Get shares count
+    const sharesCountRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM song_shares
+       WHERE song_id = ?`
+    ).bind(songId).first();
+    const sharesCount = toNum((sharesCountRow as any)?.count, 0);
 
     // Format reactions for frontend
     const formattedReactions = (reactions || []).map((r: any) => ({
@@ -124,6 +132,9 @@ export const onRequestGet: PagesFunction = async ({ request, env, params }) => {
       counts: countMap,
       my_reaction: myReaction,
       comments_count: commentsCount,
+      shares: sharesCount,
+      shares_count: sharesCount,
+      share_count: sharesCount,
     });
 
   } catch (err: any) {

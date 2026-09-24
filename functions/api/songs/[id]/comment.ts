@@ -182,10 +182,19 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       }
     }
 
+    const commentsCountRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM song_comments
+       WHERE song_id = ? AND COALESCE(is_deleted, 0) = 0`
+    ).bind(songId).first();
+    const commentsCount = toNum((commentsCountRow as any)?.count, 0);
+
     return json(
       {
         success: true,
         comment: comment ?? null,
+        comments_count: commentsCount,
+        comment_count: commentsCount,
       },
       201
     );

@@ -127,13 +127,17 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       .bind(songId)
       .first<{ c: number }>();
 
+    const sharesCount = toNum(countRow?.c, 0);
+
     return json({
       success: true,
       share_id: shareId,
       song_id: songId,
       destination,
       share: share ?? null,
-      shares_count: toNum(countRow?.c, 0),
+      shares_count: sharesCount,
+      shares: sharesCount,
+      share_count: sharesCount,
     });
   } catch (err: any) {
     return json(

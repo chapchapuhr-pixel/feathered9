@@ -209,9 +209,17 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         post?.item_type === 'music' ||
         post?.item_type === 'song' ||
         post?.source === 'song' ||
+        post?.source === 'music' ||
         post?.type === 'music' ||
         post?.type === 'song' ||
-        post?.song_id
+        post?.post_type === 'music' ||
+        post?.post_type === 'song' ||
+        post?.kind === 'music' ||
+        post?.song_id ||
+        post?.song_id2 ||
+        post?.song_title ||
+        (post?.meta as any)?.song?.id ||
+        (post?.audio_url && !post?.podcast_id)
       );
       const isPodcast = Boolean(
         post?.item_type === 'podcast' ||
@@ -235,7 +243,7 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
       } else if (isGroup) {
         endpoint = '/api/groups/posts/share';
       } else if (isSong) {
-        const sId = Number(post?.song_id || post?.song_id2 || post?.id || 0);
+        const sId = Number(post?.song_id || post?.song_id2 || (post?.meta as any)?.song?.id || (post?.meta as any)?.original_song_id || (post?.shared_song as any)?.id || post?.id || 0);
         endpoint = `/api/songs/${sId}/share`;
       } else if (isPodcast) {
         endpoint = `/api/podcasts/${itemId}/share`;
@@ -246,14 +254,14 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         : isEvent
         ? 'event'
         : isSong
-        ? 'song'
+        ? 'music'
         : isPodcast
         ? 'podcast'
         : isGroup
         ? 'group_post'
         : post?.item_type || post?.source || 'post';
 
-      const songTargetId = Number(post?.song_id || post?.song_id2 || post?.id || itemId || 0);
+      const songTargetId = Number(post?.song_id || post?.song_id2 || (post?.meta as any)?.song?.id || (post?.meta as any)?.original_song_id || (post?.shared_song as any)?.id || post?.id || itemId || 0);
 
       const payload: any = {
         user_id: currentUser?.id,
@@ -274,7 +282,10 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         payload.post_id = itemId;
         payload.group_id = post.group_id;
       }
-      if (itemType === 'music' || itemType === 'song') payload.song_id = songTargetId;
+      if (itemType === 'music' || itemType === 'song') {
+        payload.song_id = songTargetId;
+        payload.item_type = 'music';
+      }
       if (itemType === 'podcast') payload.podcast_id = itemId;
 
       const response = await apiFetch(endpoint, {

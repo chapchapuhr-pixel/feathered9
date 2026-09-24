@@ -1278,9 +1278,17 @@ const getFeedItemType = (item: any): string => {
   
   if (
     item?.source === 'song' ||
+    item?.source === 'music' ||
     item?.item_type === 'song' ||
+    item?.item_type === 'music' ||
+    item?.type === 'music' ||
+    item?.type === 'song' ||
+    item?.post_type === 'music' ||
+    item?.post_type === 'song' ||
+    item?.kind === 'music' ||
     meta?.kind === 'music' ||
-    meta?.type === 'music'
+    meta?.type === 'music' ||
+    Boolean(item?.song_id2 || item?.song_title || (item?.audio_url && !item?.podcast_id && meta?.kind !== 'podcast' && meta?.type !== 'podcast' && item?.item_type !== 'podcast' && item?.type !== 'podcast'))
   ) {
     return 'music';
   }
@@ -1311,7 +1319,7 @@ const getFeedItemId = (item: any): number => {
     case 'reel':
       return Number(item?.reel_id ?? item?.id ?? 0);
     case 'music':
-      return Number(item?.song_id2 ?? item?.song_id ?? item?.id ?? 0);
+      return Number(item?.song_id2 ?? item?.song_id ?? (item?.meta as any)?.song?.id ?? (item?.meta as any)?.original_song_id ?? (item?.shared_song as any)?.id ?? item?.id ?? 0);
     case 'podcast':
       return Number(item?.podcast_id ?? item?.id ?? 0);
     case 'sponsored':
@@ -1370,7 +1378,7 @@ const getFeedCommentFetchEndpoint = (itemType: string, p: any, viewerId: number)
     }
     case 'song':
     case 'music': {
-      const songId = p?.song_id2 || p?.song_id || p?.id;
+      const songId = p?.song_id2 || p?.song_id || (p?.meta as any)?.song?.id || (p?.meta as any)?.original_song_id || (p?.shared_song as any)?.id || p?.id;
       return `/api/songs/${songId}/comments?viewerId=${viewerId}`;
     }
     case 'podcast': {
@@ -1390,6 +1398,9 @@ const getCommentLikeEndpoint = (itemType: string, commentId: number): string => 
       return `/api/group-post-comment-likes`;
     case 'product':
       return `/api/product-reviews/${commentId}/like`;
+    case 'song':
+    case 'music':
+      return `/api/song-comments/${commentId}/like`;
     case 'reel':
     case 'video':
     case 'post':
@@ -6408,10 +6419,61 @@ export const Post = memo(
     const [showReactionsSheet, setShowReactionsSheet] = useState(false);
     const [showShareSheet, setShowShareSheet] = useState(false);
 
-    const isMusic = meta?.kind === 'music' || meta?.type === 'music';
-    const isPodcast = meta?.kind === 'podcast' || meta?.type === 'podcast';
+    const isMusic = Boolean(
+      meta?.kind === 'music' ||
+      meta?.type === 'music' ||
+      p?.type === 'music' ||
+      p?.type === 'song' ||
+      p?.post_type === 'music' ||
+      p?.post_type === 'song' ||
+      p?.kind === 'music' ||
+      p?.item_type === 'music' ||
+      p?.item_type === 'song' ||
+      p?.source === 'music' ||
+      p?.source === 'song' ||
+      p?.song_title ||
+      p?.song_id2 ||
+      p?.song_id ||
+      (p?.audio_url && !p?.podcast_id && meta?.kind !== 'podcast' && meta?.type !== 'podcast' && p?.item_type !== 'podcast' && p?.type !== 'podcast')
+    );
+    const isPodcast = meta?.kind === 'podcast' || meta?.type === 'podcast' || p?.item_type === 'podcast' || p?.type === 'podcast';
     const song = meta?.song;
     const podcast = meta?.podcast;
+
+    const regularSongData = useMemo(() => {
+      if (!isMusic) return null;
+      const target = song || p?.shared_song || (meta as any)?.song || p;
+      const coverUrl =
+        target.cover_image_url ||
+        target.song_cover_image_url ||
+        target.cover_url ||
+        target.cover ||
+        p.song_cover_image_url ||
+        p.cover_image_url ||
+        'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+      const audioUrl = target.audio_url || target.url || p.audio_url || '';
+      const title = target.title || target.song_title || p.song_title || p.title || 'Untitled Track';
+      const artist = target.artist_name || target.song_artist_name || target.artist || (p as any).artist_name || a?.name || 'Artist';
+      const duration = target.duration_seconds || target.song_duration_seconds || p.song_duration_seconds || p.duration_seconds;
+      const songId = Number(target.id || target.song_id || target.song_id2 || p.song_id2 || p.song_id || p.id || 0);
+
+      return {
+        id: songId,
+        song_id: songId,
+        title,
+        artist_name: artist,
+        artist,
+        url: audioUrl,
+        album_name: target.album_name || target.song_album_name || p.song_album_name || p.album_name,
+        cover_image_url: coverUrl,
+        cover: coverUrl,
+        audio_url: audioUrl,
+        duration_seconds: duration,
+        genre: target.genre || target.song_genre || p.song_genre || p.genre,
+        type: 'music' as const,
+        uploader_id: target.uploader_id || target.user_id || p.uploader_id || a?.id,
+      };
+    }, [isMusic, song, meta, p, a]);
 
     const rawGroupId = Number(
       p?.group_id || p?.groupId || meta?.group_id || meta?.groupId || p?.group?.id || 0
@@ -6639,6 +6701,9 @@ export const Post = memo(
         uploader_id: target.uploader_id || target.user_id || ownerAuthor?.id,
       };
     }, [isSharedSong, p, originalPost, ownerAuthor]);
+
+    const isSongPost = Boolean(isSharedSong || isMusic);
+    const songData = isSharedSong ? sharedSongData : regularSongData;
 
     const origPriceRaw = originalPost?.price ?? originalPost?.discount_price ?? originalPost?.main_price ?? null;
     const origPrice = origPriceRaw != null
@@ -7479,23 +7544,125 @@ export const Post = memo(
               </div>
             )}
 
-            {(isMusic || isPodcast) && !isSharedPost && (
+            {isMusic && !isSharedPost && regularSongData && (
+              <div className="border-t border-[#1E293B] bg-[#0A101F]">
+                <div
+                  className="relative group cursor-pointer overflow-hidden bg-slate-950/70"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onOpenAudio) onOpenAudio(regularSongData);
+                    else if (onPlayAudioTrack) onPlayAudioTrack(regularSongData);
+                  }}
+                >
+                  {/* Song Cover Art with Play Button Overlay */}
+                  <div className="w-full aspect-[16/9] sm:aspect-[2/1] max-h-[320px] relative overflow-hidden bg-black/60 flex items-center justify-center">
+                    <img
+                      src={regularSongData.cover_image_url}
+                      alt={regularSongData.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+                      }}
+                    />
+                    {/* Ambient Gradient */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#0A101F] via-black/35 to-transparent" />
+
+                    {/* Centered Large Play Button Overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <button
+                        type="button"
+                        aria-label="Play song"
+                        className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#1877F2]/90 hover:bg-[#1877F2] text-white flex items-center justify-center shadow-xl shadow-[#1877F2]/40 backdrop-blur-sm transform group-hover:scale-110 active:scale-95 transition-all cursor-pointer border-2 border-white/20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onOpenAudio) onOpenAudio(regularSongData);
+                          else if (onPlayAudioTrack) onPlayAudioTrack(regularSongData);
+                        }}
+                      >
+                        <i className="fas fa-play text-2xl sm:text-3xl ml-1 text-white" />
+                      </button>
+                    </div>
+
+                    {/* Genre / Duration badge on cover */}
+                    {(regularSongData.genre || regularSongData.duration_seconds) && (
+                      <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                        {regularSongData.genre && (
+                          <span className="bg-black/70 backdrop-blur-md text-white/90 text-xs px-2.5 py-1 rounded-full font-semibold border border-white/10">
+                            {regularSongData.genre}
+                          </span>
+                        )}
+                        {regularSongData.duration_seconds ? (
+                          <span className="bg-black/70 backdrop-blur-md text-white/90 text-xs px-2.5 py-1 rounded-full font-mono font-medium border border-white/10">
+                            {Math.floor(regularSongData.duration_seconds / 60)}:
+                            {String(regularSongData.duration_seconds % 60).padStart(2, '0')}
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Song Info Bar with Play Button */}
+                  <div className="p-3 sm:p-3.5 flex items-center justify-between gap-3 border-t border-[#1E293B]/70 bg-[#0B1120]">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-[#1E293B] shadow-sm bg-black/40">
+                        <img
+                          src={regularSongData.cover_image_url}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src =
+                              'https://media.unera.social/task_01kftb3024ed7bm84gy6j485fh_1769336848_img_0.webp';
+                          }}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[16px] sm:text-[17px] font-bold text-[#F8FAFC] truncate">
+                          {regularSongData.title}
+                        </div>
+                        <div className="text-[13px] sm:text-[14px] text-[#94A3B8] truncate flex items-center gap-1.5">
+                          <span>{regularSongData.artist_name}</span>
+                          {regularSongData.album_name && (
+                            <>
+                              <span>•</span>
+                              <span className="truncate">{regularSongData.album_name}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="bg-[#1877F2] hover:bg-[#166FE5] active:scale-95 text-white font-bold px-4 sm:px-5 py-2 rounded-xl text-[14px] sm:text-[15px] shrink-0 flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onOpenAudio) onOpenAudio(regularSongData);
+                        else if (onPlayAudioTrack) onPlayAudioTrack(regularSongData);
+                      }}
+                    >
+                      <i className="fas fa-play text-xs text-white" />
+                      <span>Play</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isPodcast && !isSharedPost && (
               <div className="mx-3 md:mx-4 mb-3 bg-[#0B1120] border border-[#1E293B] rounded-2xl overflow-hidden">
                 <div className="flex items-center gap-3 p-3">
                   <img
-                    src={
-                      (isMusic ? song?.cover_image_url : podcast?.cover_image_url) ||
-                      ''
-                    }
+                    src={podcast?.cover_image_url || ''}
                     className="w-14 h-14 rounded-xl object-cover bg-[#0B1120]"
                     alt=""
                   />
                   <div className="flex-1 overflow-hidden">
                     <div className="text-white font-bold text-[17px] truncate">
-                      {(isMusic ? song?.title : podcast?.title) || 'Untitled'}
+                      {podcast?.title || 'Untitled'}
                     </div>
                     <div className="text-[#94A3B8] text-[14px] truncate">
-                      {isMusic ? song?.artist_name : podcast?.description}
+                      {podcast?.description}
                     </div>
                   </div>
 
@@ -7503,7 +7670,7 @@ export const Post = memo(
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpenAudio?.(isMusic ? song : podcast);
+                      onOpenAudio?.(podcast);
                     }}
                     className="bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold px-4 py-2 rounded-xl text-[15px]"
                   >
@@ -7762,7 +7929,7 @@ export const Post = memo(
                   </div>
                 )}
 
-                {!isSharedPost && !p.background && mediaInfo.mediaUrl && mediaInfo.isAudio && onPlayAudioTrack && (
+                {!isSharedPost && !isSongPost && !p.background && mediaInfo.mediaUrl && mediaInfo.isAudio && onPlayAudioTrack && (
                   <div className="my-3">
                     {(() => {
                       const cover =
@@ -8082,10 +8249,11 @@ export const Post = memo(
           onClose={() => setShowShareSheet(false)}
           post={{
             ...p,
-            source: isMarketplace ? 'product' : isGroupPost ? 'group_post' : 'post',
-            item_type: isMarketplace ? 'product' : isGroupPost ? 'group_post' : 'post',
+            source: isMarketplace ? 'product' : isGroupPost ? 'group_post' : isSongPost ? 'music' : 'post',
+            item_type: isMarketplace ? 'product' : isGroupPost ? 'group_post' : isSongPost ? 'music' : 'post',
             product_id: productId,
             group_id: groupId,
+            song_id: isSongPost ? (songData?.id || p.song_id2 || p.song_id || p.id) : undefined,
           }}
           currentUser={currentUser}
           users={users}
