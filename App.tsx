@@ -142,7 +142,32 @@ const getFeedItemType = (item: any): string => {
     return 'reel';
   }
   
-  if (meta?.kind === 'music' || meta?.type === 'music') return 'music';
+  if (
+    item?.source === 'song' ||
+    item?.source === 'music' ||
+    item?.item_type === 'song' ||
+    item?.item_type === 'music' ||
+    item?.type === 'music' ||
+    item?.type === 'song' ||
+    item?.post_type === 'music' ||
+    item?.post_type === 'song' ||
+    item?.kind === 'music' ||
+    meta?.kind === 'music' ||
+    meta?.type === 'music' ||
+    Boolean(
+      item?.song_id2 ||
+      item?.song_id ||
+      item?.song_title ||
+      (item?.audio_url &&
+        !item?.podcast_id &&
+        meta?.kind !== 'podcast' &&
+        meta?.type !== 'podcast' &&
+        item?.item_type !== 'podcast' &&
+        item?.type !== 'podcast')
+    )
+  ) {
+    return 'music';
+  }
   if (meta?.kind === 'podcast' || meta?.type === 'podcast') return 'podcast';
   
   return 'post';
@@ -167,7 +192,15 @@ const getFeedItemId = (item: any): number => {
     case 'reel':
       return Number(item?.reel_id ?? item?.id ?? 0);
     case 'music':
-      return Number(item?.song_id2 ?? item?.song_id ?? item?.id ?? 0);
+      return Number(
+        item?.song_id2 ??
+        item?.song_id ??
+        (item?.meta as any)?.song?.id ??
+        (item?.meta as any)?.original_song_id ??
+        (item?.shared_song as any)?.id ??
+        item?.id ??
+        0
+      );
     case 'podcast':
       return Number(item?.podcast_id ?? item?.id ?? 0);
     case 'sponsored':
@@ -10063,9 +10096,24 @@ const fetchComments = useCallback(async (item: any) => {
         endpoint = `/api/posts/${id}/comments?viewerId=${currentUser?.id || 0}`;
         break;
       case 'music':
-      case 'song':
-        endpoint = `/api/songs/${id}/comments?viewerId=${currentUser?.id || 0}`;
-        break;
+      case 'song': {
+        const songId = Number(
+          id ||
+          (item as any)?.song_id ||
+          (item as any)?.song_id2 ||
+          (item as any)?.meta?.song?.id ||
+          (item as any)?.meta?.original_song_id ||
+          (item as any)?.shared_song?.id ||
+          0
+        );
+        const userId = currentUser?.id ? String(currentUser.id) : '0';
+        const res = await fetch(`/api/songs/${songId}/comments?viewerId=${userId}`, {
+          method: 'GET',
+          headers: { 'x-user-id': String(userId) },
+        });
+        const data = await res.json().catch(() => null);
+        return safeArray(data?.comments ?? data);
+      }
       case 'podcast':
         endpoint = `/api/podcasts/${id}/comments?viewerId=${currentUser?.id || 0}`;
         break;
@@ -10213,15 +10261,25 @@ const createComment = useCallback(async (
         };
         break;
       case 'music':
-      case 'song':
-        endpoint = `/api/songs/${id}/comment`;
+      case 'song': {
+        const songId = Number(
+          id ||
+          (targetItem as any)?.song_id ||
+          (targetItem as any)?.song_id2 ||
+          (targetItem as any)?.meta?.song?.id ||
+          (targetItem as any)?.meta?.original_song_id ||
+          (targetItem as any)?.shared_song?.id ||
+          0
+        );
+        endpoint = `/api/songs/${songId}/comment`;
         payload = {
           user_id: currentUser.id,
           text: text || '',
+          image_url: image_url || null,
           parent_comment_id: parentCommentId ?? null,
-          image_url: image_url || '',
         };
         break;
+      }
       case 'podcast':
         endpoint = `/api/podcasts/${id}/comments`;
         payload = {
@@ -10241,10 +10299,23 @@ const createComment = useCallback(async (
         };
     }
 
-    const data = await apiFetch(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    let data: any = null;
+    if (type === 'music' || type === 'song') {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
+        body: JSON.stringify(payload),
+      });
+      data = await res.json().catch(() => null);
+    } else {
+      data = await apiFetch(endpoint, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
 
     const newComment: any = {
       id: safeNumber(data?.comment?.id ?? 0),
@@ -10417,14 +10488,36 @@ const editComment = useCallback(async (
   }
 }, [currentUser, requireAuth, view, activeCommentsIdentity, commentPostSnapshot]);
 
-const deleteComment = useCallback(async (commentId: number) => {
+const deleteComment = useCallback(async (commentId: number, itemOrSongId?: any) => {
   if (!requireAuth('Deleting comments')) return false;
   if (!currentUser) return false;
 
   try {
-    await apiFetch(`/api/post-comments/${commentId}/delete?user_id=${currentUser.id}`, {
-      method: 'DELETE',
-    });
+    const isSong =
+      (itemOrSongId && (itemOrSongId?.item_type === 'music' || itemOrSongId?.item_type === 'song' || itemOrSongId?.type === 'music' || itemOrSongId?.type === 'song' || itemOrSongId?.song_id || itemOrSongId?.song_id2)) ||
+      (activeCommentsIdentity?.type === 'music_post');
+    const songId = Number(
+      itemOrSongId?.song_id ??
+      itemOrSongId?.song_id2 ??
+      (typeof itemOrSongId === 'number' ? itemOrSongId : null) ??
+      (commentPostSnapshot as any)?.song_id ??
+      (commentPostSnapshot as any)?.song_id2 ??
+      (commentPostSnapshot as any)?.meta?.song?.id ??
+      (commentPostSnapshot as any)?.meta?.original_song_id ??
+      (commentPostSnapshot as any)?.id ??
+      0
+    );
+
+    if (isSong && songId) {
+      await fetch(`/api/songs/${songId}/comments?comment_id=${commentId}&user_id=${currentUser.id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': String(currentUser.id) },
+      });
+    } else {
+      await apiFetch(`/api/post-comments/${commentId}/delete?user_id=${currentUser.id}`, {
+        method: 'DELETE',
+      });
+    }
 
     const removeCommentFromPosts = (postsList: any[]) => {
       return postsList.map(post => {
@@ -10525,7 +10618,18 @@ const likeComment = useCallback(async (commentId: number) => {
   }
 
   try {
-    const data = await apiFetch(`/api/post-comments/${commentId}/like`, {
+    const isSong =
+      activeCommentsIdentity?.type === 'music_post' ||
+      (commentPostSnapshot as any)?.item_type === 'music' ||
+      (commentPostSnapshot as any)?.item_type === 'song' ||
+      (commentPostSnapshot as any)?.type === 'music' ||
+      (commentPostSnapshot as any)?.type === 'song' ||
+      (commentPostSnapshot as any)?.song_id ||
+      (commentPostSnapshot as any)?.song_id2;
+    const likeEndpoint = isSong
+      ? `/api/song-comments/${commentId}/like`
+      : `/api/post-comments/${commentId}/like`;
+    const data = await apiFetch(likeEndpoint, {
       method: 'POST',
       body: JSON.stringify({ user_id: currentUser.id }),
     });

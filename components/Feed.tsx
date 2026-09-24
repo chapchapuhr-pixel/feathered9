@@ -9381,6 +9381,20 @@ export const CommentsSheet = memo(
       case 'product':
         const productId = p.product_id || p.id;
         return `/api/products/${productId}/reviews?viewerId=${viewerId}`;
+      case 'song':
+      case 'music': {
+        const songId = Number(
+          p?.song_id2 ||
+          p?.song_id ||
+          (p?.meta as any)?.song?.id ||
+          (p?.meta as any)?.original_song_id ||
+          (p?.shared_song as any)?.id ||
+          postId ||
+          p?.id ||
+          0
+        );
+        return `/api/songs/${songId}/comments?viewerId=${viewerId}`;
+      }
       case 'reel':
       case 'video':
       case 'post':
@@ -9404,6 +9418,20 @@ export const CommentsSheet = memo(
       case 'product':
         const productId = p.product_id || p.id;
         return `/api/products/${productId}/review`;
+      case 'song':
+      case 'music': {
+        const songId = Number(
+          p?.song_id2 ||
+          p?.song_id ||
+          (p?.meta as any)?.song?.id ||
+          (p?.meta as any)?.original_song_id ||
+          (p?.shared_song as any)?.id ||
+          postId ||
+          p?.id ||
+          0
+        );
+        return `/api/songs/${songId}/comment`;
+      }
       case 'reel':
       case 'video':
       case 'post':
@@ -9425,6 +9453,20 @@ export const CommentsSheet = memo(
         return `/api/group-post-comments`;
       case 'product':
         return `/api/product-reviews/${commentId}/reply`;
+      case 'song':
+      case 'music': {
+        const songId = Number(
+          p?.song_id2 ||
+          p?.song_id ||
+          (p?.meta as any)?.song?.id ||
+          (p?.meta as any)?.original_song_id ||
+          (p?.shared_song as any)?.id ||
+          postId ||
+          p?.id ||
+          0
+        );
+        return `/api/songs/${songId}/comment`;
+      }
       case 'reel':
       case 'video':
       case 'post':
@@ -9443,9 +9485,12 @@ export const CommentsSheet = memo(
       case 'event':
         return `/api/event-comments/${commentId}/like`;
       case 'group_post':
-        return `/api/group-post-comment-likes`;
+        return `/api/post-comments/${commentId}/like`;
       case 'product':
         return `/api/product-reviews/${commentId}/like`;
+      case 'song':
+      case 'music':
+        return `/api/song-comments/${commentId}/like`;
       case 'reel':
       case 'video':
       case 'post':
@@ -9713,13 +9758,26 @@ export const CommentsSheet = memo(
       switch (itemType) {
         case 'song':
         case 'music': {
-          const songId = p.song_id2 || p.song_id || p.id;
-          await apiFetch(`/api/songs/${songId}/comments`, {
+          const songId = Number(
+            p.song_id2 ||
+            p.song_id ||
+            (p?.meta as any)?.song?.id ||
+            (p?.meta as any)?.original_song_id ||
+            (p?.shared_song as any)?.id ||
+            postId ||
+            p.id ||
+            0
+          );
+          await fetch(`/api/songs/${songId}/comments`, {
             method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': String(userId),
+            },
             body: JSON.stringify({
-              action: nextAction,
               user_id: userId,
               comment_id: commentId,
+              action: nextAction, // "hide" or "unhide"
             }),
           });
           break;
@@ -9809,9 +9867,19 @@ export const CommentsSheet = memo(
       switch (itemType) {
         case 'song':
         case 'music': {
-          const songId = p.song_id2 || p.song_id || p.id;
-          await apiFetch(`/api/songs/${songId}/comments?comment_id=${commentId}&user_id=${userId}`, {
+          const songId = Number(
+            p.song_id2 ||
+            p.song_id ||
+            (p?.meta as any)?.song?.id ||
+            (p?.meta as any)?.original_song_id ||
+            (p?.shared_song as any)?.id ||
+            postId ||
+            p.id ||
+            0
+          );
+          await fetch(`/api/songs/${songId}/comments?comment_id=${commentId}&user_id=${userId}`, {
             method: 'DELETE',
+            headers: { 'x-user-id': String(userId) },
           });
           break;
         }
@@ -9868,8 +9936,21 @@ export const CommentsSheet = memo(
 
     try {
       const endpoint = getCommentEndpoint();
-      const data = await apiFetch(endpoint);
-      const arr = Array.isArray(data) ? data : data?.comments || [];
+      const viewerId = safeUserId(currentUser);
+      let arr: any[] = [];
+
+      if (itemType === 'song' || itemType === 'music') {
+        const res = await fetch(endpoint, {
+          method: 'GET',
+          headers: { 'x-user-id': String(viewerId) },
+          signal: abortControllerRef.current.signal,
+        });
+        const data = await res.json().catch(() => null);
+        arr = Array.isArray(data) ? data : data?.comments || [];
+      } else {
+        const data = await apiFetch(endpoint);
+        arr = Array.isArray(data) ? data : data?.comments || [];
+      }
 
       if (arr.length > 0) {
         setComments((prev) => {
@@ -10104,7 +10185,31 @@ export const CommentsSheet = memo(
     // Actual API call: If onComment is provided, it handles the backend insertion and state sync.
     // Otherwise fallback to direct endpoint POST.
     try {
-      if (onComment) {
+      if (itemType === 'song' || itemType === 'music') {
+        const songId = Number(
+          p?.song_id2 ||
+          p?.song_id ||
+          (p?.meta as any)?.song?.id ||
+          (p?.meta as any)?.original_song_id ||
+          (p?.shared_song as any)?.id ||
+          postId ||
+          p?.id ||
+          0
+        );
+        await fetch(`/api/songs/${songId}/comment`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': String(safeUserId(currentUser)),
+          },
+          body: JSON.stringify({
+            user_id: safeUserId(currentUser),
+            text: finalText,
+            image_url: uploadedImageUrl || null,
+            parent_comment_id: parentCommentId ?? null,
+          }),
+        });
+      } else if (onComment) {
         await onComment(post || postId, finalText, parentCommentId, selectedImage || undefined);
       } else {
         let endpoint = '';

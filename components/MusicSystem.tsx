@@ -689,18 +689,24 @@ export const CommentsSheet: React.FC<{
       setLoading(true);
     }
     try {
-      const endpoint = `/api/songs/${track.id}/comments`;
-      const res = await apiJson<any[]>(endpoint, { method: 'GET' });
-      if (res.success && Array.isArray(res.data)) {
-        setComments(res.data);
-        setCachedComments('song', track.id, res.data);
-      }
+      const viewerId = currentUser?.id ? String(currentUser.id) : '';
+      const endpoint = `/api/songs/${track.id}/comments?viewerId=${viewerId || 0}`;
+      const res = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          ...(viewerId ? { 'x-user-id': viewerId } : {}),
+        },
+      });
+      const data = await res.json().catch(() => null);
+      const commentsList = Array.isArray(data) ? data : data?.comments || [];
+      setComments(commentsList);
+      setCachedComments('song', track.id, commentsList);
     } catch (error) {
       console.error('Failed to fetch comments:', error);
     } finally {
       setLoading(false);
     }
-  }, [track]);
+  }, [track, currentUser]);
 
   useEffect(() => {
     if (isOpen && track?.id) {
@@ -735,12 +741,21 @@ export const CommentsSheet: React.FC<{
     try {
       const endpoint = `/api/songs/${track.id}/comment`;
       
-      const res = await apiJson<any>(endpoint, {
+      const res = await fetch(endpoint, {
         method: 'POST',
-        body: JSON.stringify({ user_id: currentUser.id, text: newCommentText }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          text: newCommentText,
+          image_url: null,
+          parent_comment_id: null,
+        }),
       });
 
-      if (res.success) {
+      if (res.ok) {
         fetchComments(true);
         onCommentAdded?.();
       }
@@ -831,11 +846,15 @@ export const CommentsSheet: React.FC<{
 
     try {
       const endpoint = `/api/songs/${track.id}/comments`;
-      await apiFetch(endpoint, {
+      await fetch(endpoint, {
         method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id),
+        },
         body: JSON.stringify({
-          user_id: Number(currentUser.id),
-          comment_id: Number(commentId),
+          user_id: currentUser.id,
+          comment_id: commentId,
           action: nextAction,
         }),
       });
@@ -857,8 +876,9 @@ export const CommentsSheet: React.FC<{
 
     try {
       const endpoint = `/api/songs/${track.id}/comments?comment_id=${commentId}&user_id=${currentUser.id}`;
-      await apiFetch(endpoint, {
+      await fetch(endpoint, {
         method: 'DELETE',
+        headers: { 'x-user-id': String(currentUser.id) },
       });
 
       onCommentAdded?.();
