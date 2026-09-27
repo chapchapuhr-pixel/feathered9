@@ -254,14 +254,36 @@ const isStoryVideo = (story: any) => {
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(firstUrl);
 };
 
-const getStoryAuthorName = (story: any) =>
-  story?.user?.name || story?.author_name || story?.username || 'User';
-
-const getStoryAuthorImage = (story: any) => {
-  const name = getStoryAuthorName(story);
+const getStoryAuthorName = (story: any, users?: any[]) => {
+  const userId = Number(story?.user_id || story?.user?.id || 0);
+  const matchedUser = userId && users ? users.find((u: any) => Number(u.id) === userId) : null;
+  const isValidName = (val: any) => {
+    if (!val || typeof val !== 'string') return false;
+    const s = val.trim();
+    return s.length > 0 && s.toLowerCase() !== 'user' && s.toLowerCase() !== 'un';
+  };
   return (
-    story?.user?.profile_image_url ||
+    (isValidName(matchedUser?.name) ? matchedUser!.name : null) ||
+    (isValidName(story?.author_full_name) ? story.author_full_name : null) ||
+    (isValidName(story?.user?.name) ? story.user.name : null) ||
+    (isValidName(story?.author_name) ? story.author_name : null) ||
+    matchedUser?.username ||
+    story?.author_username ||
+    story?.username ||
+    'User'
+  );
+};
+
+const getStoryAuthorImage = (story: any, users?: any[]) => {
+  const userId = Number(story?.user_id || story?.user?.id || 0);
+  const matchedUser = userId && users ? users.find((u: any) => Number(u.id) === userId) : null;
+  const name = getStoryAuthorName(story, users);
+  return (
+    matchedUser?.profile_image_url ||
+    matchedUser?.avatar_url ||
     story?.author_image ||
+    story?.user?.profile_image_url ||
+    story?.user?.avatar_url ||
     `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1877F2&color=fff&size=128`
   );
 };
@@ -1234,13 +1256,23 @@ const getFeedItemType = (item: any): string => {
   const meta = item?.meta || {};
   
   if (
+    item?.kind === 'story_share' ||
+    item?.source === 'story_share' ||
+    item?.item_type === 'story_share' ||
+    item?.type === 'story_share' ||
+    item?.post_type === 'story_share' ||
+    meta?.kind === 'story_share' ||
+    meta?.type === 'story_share'
+  ) return 'story_share';
+
+  if (
     item?.source === 'story' ||
     item?.item_type === 'story' ||
     item?.type === 'story' ||
     item?.post_type === 'story' ||
     meta?.kind === 'story' ||
     meta?.type === 'story' ||
-    !!item?.story_id
+    (!!item?.story_id && !item?.shared_post_id)
   ) return 'story';
 
   if (
@@ -2966,8 +2998,37 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
 }) => {
   const storyId = Number(story?.id || story?.story_id || 0);
   const authorId = Number(story?.user_id || story?.user?.id || 0);
-  const authorName = getStoryAuthorName(story);
-  const authorImage = getStoryAuthorImage(story);
+  const authorUser = useMemo(() => {
+    return (
+      (authorId ? users?.find((u) => Number(u.id) === authorId) : null) ||
+      (currentUser && Number(currentUser.id) === authorId ? currentUser : null) ||
+      (story?.user && typeof story.user === 'object' ? story.user : null)
+    );
+  }, [authorId, users, currentUser, story?.user]);
+
+  const isValidName = (val: any) => {
+    if (!val || typeof val !== 'string') return false;
+    const s = val.trim();
+    return s.length > 0 && s.toLowerCase() !== 'user' && s.toLowerCase() !== 'un';
+  };
+
+  const authorName =
+    (isValidName(authorUser?.name) ? authorUser!.name : null) ||
+    (isValidName(story?.author_full_name) ? story.author_full_name : null) ||
+    (isValidName(story?.author_name) ? story.author_name : null) ||
+    (isValidName(story?.user?.name) ? story.user.name : null) ||
+    authorUser?.username ||
+    story?.author_username ||
+    story?.username ||
+    getStoryAuthorName(story, users);
+
+  const authorImage =
+    authorUser?.profile_image_url ||
+    authorUser?.avatar_url ||
+    story?.author_image ||
+    story?.user?.profile_image_url ||
+    story?.user?.avatar_url ||
+    getStoryAuthorImage(story, users);
 
   const storyMedia = getStoryMediaList(story);
   const primaryMedia = storyMedia[0];
@@ -3037,6 +3098,17 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
   }, [storyId, story?.my_reaction, story?.liked_by_me, story?.reactions_count, story?.comments_count, story?.shares_count, currentUser?.id]);
 
   const normalizedStoryPost = useMemo(() => {
+    const isVerified = Boolean(authorUser?.is_verified || story?.is_verified || story?.author_verified);
+    const authorObj = {
+      id: authorId,
+      name: authorName,
+      username: authorUser?.username || story?.author_username || story?.username || 'user',
+      user_name: authorUser?.username || story?.author_username || story?.username || 'user',
+      profile_image_url: authorImage,
+      avatar_url: authorImage,
+      is_verified: isVerified,
+      verified: isVerified,
+    };
     return {
       ...story,
       id: storyId,
@@ -3044,19 +3116,17 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
       item_type: 'story',
       type: 'story',
       post_type: 'story',
+      kind: 'story',
       shares: sharesCount,
       shares_count: sharesCount,
-      author: authorName,
+      author: authorObj,
+      user: authorObj,
       author_name: authorName,
+      author_full_name: authorName,
+      author_username: authorObj.username,
       author_image: authorImage,
-      user: story?.user || {
-        id: authorId,
-        name: authorName,
-        username: story?.author_username || story?.username || 'creator',
-        profile_image_url: authorImage,
-      },
     };
-  }, [story, storyId, authorId, authorName, authorImage, sharesCount]);
+  }, [story, storyId, authorId, authorUser, authorName, authorImage, sharesCount]);
 
   const handleReact = async (type: ReactionType) => {
     if (!currentUser) {
@@ -6391,12 +6461,14 @@ export const Post = memo(
     pushButton,
     onToggleGroupPostLike,
     hideCommentPreview = false,
+    onOpenStory,
   }: {
     post: PostType;
     author: User | any;
     currentUser: User | null;
     users?: User[];
     stories?: any[];
+    onOpenStory?: (story: any) => void;
 
     onProfileClick: (id: number) => void;
 
@@ -6811,6 +6883,21 @@ export const Post = memo(
     const createdAtLabel = formatRelativeTime(p.created_at);
     const postId = getFeedItemId(p);
 
+    const isSharedStory = Boolean(
+      p.shared_story ||
+      p.item_type === 'story_share' ||
+      p.source === 'story_share' ||
+      p.type === 'story_share' ||
+      p.post_type === 'story_share' ||
+      (p.shared_post && (
+        p.shared_post.item_type === 'story' ||
+        p.shared_post.type === 'story' ||
+        p.shared_post.source === 'story' ||
+        p.shared_post.kind === 'story' ||
+        !!p.shared_post.story_id
+      ))
+    );
+
     const isSharedSong = Boolean(
       p.shared_song ||
       p.item_type === 'song_share' ||
@@ -6833,10 +6920,16 @@ export const Post = memo(
     );
 
     const isSharedPost = Boolean(
+      isSharedStory ||
+      p.shared_story ||
       p.shared_song ||
       p.shared_product ||
       p.shared_post ||
       (p.shared_post_id && p.item_type !== 'product' && p.source !== 'product') ||
+      p.item_type === 'story_share' ||
+      p.source === 'story_share' ||
+      p.type === 'story_share' ||
+      p.post_type === 'story_share' ||
       p.item_type === 'song_share' ||
       p.source === 'song_share' ||
       p.type === 'song_share' ||
@@ -6852,6 +6945,7 @@ export const Post = memo(
       p.post_type === 'share'
     );
     const originalPost =
+      p.shared_story ||
       p.shared_song ||
       p.shared_product ||
       p.shared_post ||
@@ -6872,24 +6966,79 @@ export const Post = memo(
 
     const ownerAuthor = useMemo(() => {
       if (!originalPost) return null;
-      return (
-        originalPost.author ||
-        originalPost.user ||
-        originalPost.seller ||
-        (originalPost.seller_id && users?.find((u) => Number(u.id) === Number(originalPost.seller_id))) ||
-        (originalPost.uploader_id && users?.find((u) => Number(u.id) === Number(originalPost.uploader_id))) ||
-        (originalPost.user_id && users?.find((u) => Number(u.id) === Number(originalPost.user_id))) || {
-          id: originalPost.uploader_id || originalPost.seller_id || originalPost.user_id,
-          name: originalPost.artist_name || originalPost.author_name || originalPost.author?.name || originalPost.seller_name || 'Artist',
-          username: originalPost.author_username || originalPost.author?.username || 'artist',
-          profile_image_url:
-            originalPost.author_image ||
-            originalPost.author_avatar ||
-            originalPost.author?.profile_image_url ||
-            null,
-          is_verified: Boolean(originalPost.author_verified || originalPost.author?.is_verified || originalPost.is_verified || originalPost.verified),
-        }
+      const rawAuthor = originalPost.author;
+      const rawUser = originalPost.user;
+      const authorObj = typeof rawAuthor === 'object' && rawAuthor !== null ? rawAuthor : null;
+      const userObj = typeof rawUser === 'object' && rawUser !== null ? rawUser : null;
+      const authorId = Number(
+        authorObj?.id ||
+        userObj?.id ||
+        originalPost.user_id ||
+        originalPost.seller_id ||
+        originalPost.uploader_id ||
+        0
       );
+
+      const matchedUser = authorId ? users?.find((u) => Number(u.id) === authorId) : null;
+
+      const isValidOwnerName = (val: any) => {
+        if (!val || typeof val !== 'string') return false;
+        const s = val.trim();
+        return s.length > 0 && s.toLowerCase() !== 'user' && s.toLowerCase() !== 'un';
+      };
+
+      const name =
+        (isValidOwnerName(matchedUser?.name) ? matchedUser!.name : null) ||
+        (isValidOwnerName(authorObj?.name) ? authorObj!.name : null) ||
+        (isValidOwnerName(userObj?.name) ? userObj!.name : null) ||
+        (isValidOwnerName(rawAuthor) ? (rawAuthor as string) : null) ||
+        (isValidOwnerName(originalPost.author_full_name) ? originalPost.author_full_name : null) ||
+        (isValidOwnerName(originalPost.author_name) ? originalPost.author_name : null) ||
+        (isValidOwnerName(originalPost.artist_name) ? originalPost.artist_name : null) ||
+        (isValidOwnerName(originalPost.seller_name) ? originalPost.seller_name : null) ||
+        matchedUser?.username ||
+        authorObj?.username ||
+        userObj?.username ||
+        originalPost.author_username ||
+        originalPost.username ||
+        'User';
+
+      const username =
+        matchedUser?.username ||
+        authorObj?.username ||
+        userObj?.username ||
+        originalPost.author_username ||
+        originalPost.username ||
+        'user';
+
+      const avatar =
+        matchedUser?.profile_image_url ||
+        matchedUser?.avatar_url ||
+        authorObj?.profile_image_url ||
+        authorObj?.avatar_url ||
+        userObj?.profile_image_url ||
+        userObj?.avatar_url ||
+        originalPost.author_avatar ||
+        originalPost.author_image ||
+        null;
+
+      const isVerified = Boolean(
+        matchedUser?.is_verified ||
+        authorObj?.is_verified ||
+        userObj?.is_verified ||
+        originalPost.author_verified ||
+        originalPost.is_verified ||
+        originalPost.verified
+      );
+
+      return {
+        id: authorId,
+        name,
+        username,
+        profile_image_url: avatar,
+        avatar_url: avatar,
+        is_verified: isVerified,
+      };
     }, [originalPost, users]);
 
     const origMediaInfo = useMemo(() => {
@@ -7526,6 +7675,11 @@ export const Post = memo(
                             {Boolean(ownerAuthor.is_verified) && (
                               <VerifiedBadge size={20} className="shrink-0" />
                             )}
+                            {isSharedStory && (
+                              <span className="text-[#1877F2] text-[12px] font-bold bg-[#1877F2]/10 px-2 py-0.5 rounded-full">
+                                Story
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-1.5 text-[#94A3B8] text-[13px]">
                             <span>@{ownerAuthor.username || 'user'}</span>
@@ -7541,6 +7695,25 @@ export const Post = memo(
                         </div>
                       </div>
                     </div>
+
+                    {/* Text Story Preview if shared text story without media */}
+                    {isSharedStory && (originalPost.type === 'text' || originalPost.background_style) && !origMediaInfo?.urls?.length && (
+                      <div
+                        className="h-[300px] flex items-center justify-center text-center px-6 cursor-pointer"
+                        style={{
+                          background:
+                            originalPost.background_style ||
+                            'linear-gradient(45deg, #1877F2, #0055FF)',
+                        }}
+                        onClick={() => onOpenStory?.(originalPost)}
+                      >
+                        <div className="max-w-[85%]">
+                          <p className="text-white font-bold text-2xl whitespace-pre-wrap break-words">
+                            {originalPost.text_content || originalPost.content || 'Story'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Product Title if shared product */}
                     {originalPost.title && !isSharedSong && (
@@ -11668,6 +11841,7 @@ export const Feed = memo(({
   currentUser={currentUser}
   users={users}
   stories={stories}
+  onOpenStory={onOpenStory}
   onProfileClick={onProfileClick}
   onReact={onReact}
   onShare={onShare}

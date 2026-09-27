@@ -196,9 +196,37 @@ const normalizeStoryMedia = (item: any) => {
 
 const addNormalizedStoryMedia = (story: any) => {
   const media = normalizeStoryMedia(story);
+  const isVerified = Boolean(story?.author_is_verified && story?.author_is_verified !== '0');
+  const isValidName = (v: any) =>
+    typeof v === 'string' &&
+    v.trim().length > 0 &&
+    v.trim().toLowerCase() !== 'user' &&
+    v.trim().toLowerCase() !== 'un';
+
+  const authorName =
+    (isValidName(story?.author_full_name) ? story.author_full_name.trim() : null) ||
+    (isValidName(story?.author_name) ? story.author_name.trim() : null) ||
+    story?.author_username ||
+    story?.username ||
+    'User';
+  const authorUser = {
+    id: story.user_id,
+    name: authorName,
+    username: story?.author_username || '',
+    user_name: story?.author_username || '',
+    profile_image_url: story?.author_image || '',
+    avatar_url: story?.author_image || '',
+    is_verified: isVerified,
+    verified: isVerified,
+  };
 
   return {
     ...story,
+
+    author_name: authorName,
+    author_full_name: story?.author_full_name || authorName,
+    user: story?.user || authorUser,
+    author: story?.author || authorUser,
 
     effect_id: story?.effect_id || "none",
 
@@ -219,8 +247,15 @@ const addNormalizedStoryMedia = (story: any) => {
 const selectStorySql = `
   SELECT
     s.*,
-    u.username as author_name,
+    CASE
+      WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+      WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+      ELSE 'User'
+    END AS author_name,
+    u.name as author_full_name,
+    u.username as author_username,
     u.profile_image_url as author_image,
+    u.is_verified as author_is_verified,
 
     (SELECT COUNT(*) FROM story_views sv WHERE sv.story_id = s.id) AS views_count,
     (SELECT COUNT(*) FROM story_reactions sr WHERE sr.story_id = s.id) AS reactions_count,

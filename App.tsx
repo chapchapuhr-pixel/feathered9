@@ -99,6 +99,18 @@ const getFeedItemType = (item: any): string => {
   const meta = item?.meta || {};
   
   if (
+    item?.kind === 'story_share' ||
+    item?.source === 'story_share' ||
+    item?.item_type === 'story_share' ||
+    item?.type === 'story_share' ||
+    item?.post_type === 'story_share' ||
+    meta?.kind === 'story_share' ||
+    meta?.type === 'story_share'
+  ) {
+    return 'story_share';
+  }
+
+  if (
     item?.kind === 'story' ||
     item?.source === 'story' ||
     item?.item_type === 'story' ||
@@ -196,6 +208,8 @@ const getFeedItemId = (item: any): number => {
   const type = getFeedItemType(item);
 
   switch (type) {
+    case 'story_share':
+      return Number(item?.share_id ?? item?.id ?? 0);
     case 'story':
       return Number(item?.story_id ?? item?.id ?? 0);
     case 'product':
@@ -1078,7 +1092,12 @@ const normalizePost = (p: any): PostType => {
     ...p,
     id: resolvedId,
     user_id: p?.user_id === null || p?.user_id === undefined ? null : safeNumber(p?.user_id),
-    content: safeString(p?.content),
+    content: safeString(p?.content || p?.text_content || p?.description),
+    text_content: p?.text_content || p?.content || '',
+    background_style: p?.background_style ?? '',
+    author_name: p?.author_name || p?.author_full_name || p?.author?.name || p?.user?.name || '',
+    author_username: p?.author_username || p?.author?.username || p?.user?.username || '',
+    author_image: p?.author_image || p?.author?.profile_image_url || p?.user?.profile_image_url || '',
 
     media_url: mediaUrl,
     video_url: videoUrl || (isVideo ? mediaUrl : null),
@@ -1127,13 +1146,20 @@ const normalizePost = (p: any): PostType => {
     my_rsvp_status: p?.my_rsvp_status ?? p?.user_rsvp_status ?? '',
 
     // Shared post properties (Facebook style post sharing)
-    shared_post_id: p?.shared_post_id ?? p?.sharedPostId ?? (p?.shared_post?.id || null),
+    shared_post_id: p?.shared_post_id ?? p?.sharedPostId ?? (p?.shared_post?.id || p?.shared_story?.id || null),
     shared_post: (() => {
-      let sp = p?.shared_post ?? p?.sharedPost;
+      let sp = p?.shared_post ?? p?.sharedPost ?? p?.shared_story;
       if (typeof sp === 'string') {
         try { sp = JSON.parse(sp); } catch { sp = null; }
       }
       return sp ? normalizePost(sp) : null;
+    })(),
+    shared_story: (() => {
+      let st = p?.shared_story ?? p?.sharedStory ?? (p?.shared_post?.item_type === 'story' ? p.shared_post : null);
+      if (typeof st === 'string') {
+        try { st = JSON.parse(st); } catch { st = null; }
+      }
+      return st || null;
     })(),
     shared_user: (() => {
       let su = p?.shared_user ?? p?.sharedUser;
@@ -1234,8 +1260,8 @@ const normalizeEvent = (e: any): Event => {
   const userId = safeNumber(s?.user_id ?? s?.userId ?? 0);
 
   let storyUser = s?.user;
-  if (existingUser && storyUser) {
-    storyUser = mergeUserSafe(existingUser, storyUser);
+  if (existingUser) {
+    storyUser = storyUser ? mergeUserSafe(existingUser, storyUser) : existingUser;
   }
 
   const rawMediaUrl = String(s?.media_url ?? s?.mediaUrl ?? '').trim();
@@ -1304,6 +1330,59 @@ const normalizeEvent = (e: any): Event => {
     mediaUrls[0] ||
     '';
 
+  const isValidStoryAuthorName = (v: any) => {
+    if (!v || typeof v !== 'string') return false;
+    const trimmed = v.trim();
+    return trimmed.length > 0 && trimmed.toLowerCase() !== 'user' && trimmed.toLowerCase() !== 'un';
+  };
+
+  const authorName =
+    (isValidStoryAuthorName(s?.author_full_name) ? s.author_full_name.trim() : null) ||
+    (isValidStoryAuthorName(s?.author_name) ? s.author_name.trim() : null) ||
+    (isValidStoryAuthorName(storyUser?.name) ? storyUser.name.trim() : null) ||
+    (isValidStoryAuthorName(existingUser?.name) ? existingUser.name.trim() : null) ||
+    (isValidStoryAuthorName(s?.authorName) ? s.authorName.trim() : null) ||
+    storyUser?.username ||
+    existingUser?.username ||
+    s?.author_username ||
+    s?.username ||
+    'User';
+
+  const authorUsername =
+    s?.author_username ||
+    storyUser?.username ||
+    existingUser?.username ||
+    s?.authorUsername ||
+    s?.username ||
+    '';
+
+  const authorImage =
+    s?.author_image ||
+    storyUser?.profile_image_url ||
+    storyUser?.avatar_url ||
+    existingUser?.profile_image_url ||
+    existingUser?.avatar_url ||
+    s?.authorImage ||
+    '';
+
+  const isVerified = Boolean(
+    s?.author_is_verified ||
+    s?.author_verified ||
+    storyUser?.is_verified ||
+    existingUser?.is_verified
+  );
+
+  const authorObj = storyUser || {
+    id: userId,
+    name: authorName,
+    username: authorUsername,
+    user_name: authorUsername,
+    profile_image_url: authorImage,
+    avatar_url: authorImage,
+    is_verified: isVerified,
+    verified: isVerified,
+  };
+
   return {
     id: resolvedId,
     user_id: userId,
@@ -1317,12 +1396,14 @@ const normalizeEvent = (e: any): Event => {
     music_url: s?.music_url ?? s?.musicUrl ?? '',
     music_title: s?.music_title ?? s?.musicTitle ?? '',
     created_at: s?.created_at ?? s?.createdAt ?? new Date().toISOString(),
-    author_name: s?.author_name ?? s?.authorName ?? '',
-    author_username: s?.author_username ?? s?.authorUsername ?? '',
-    author_image: s?.author_image ?? s?.authorImage ?? '',
-    username: s?.username ?? '',
+    author_name: authorName,
+    author_full_name: authorName,
+    author_username: authorUsername,
+    author_image: authorImage,
+    username: authorUsername,
     liked_by_me: Boolean(s?.liked_by_me ?? s?.likedByMe ?? false),
-    user: storyUser,
+    user: authorObj,
+    author: authorObj,
     views: safeArray(s?.views),
     views_count: safeNumber(s?.views_count ?? s?.viewsCount, 0),
     reactions_count: safeNumber(s?.reactions_count ?? s?.reactionsCount, 0),
@@ -2505,7 +2586,10 @@ const normalizeFeedRowToPost = (row: any): PostType => {
 
 const authorFromFeedRow = (row: any): User => {
   const username = row?.username ?? 'user';
-  const name = row?.username ?? 'User';
+  const rawName = row?.name || row?.author?.name || row?.author_name || row?.author_full_name;
+  const name = (typeof rawName === 'string' && rawName.trim().length > 0 && rawName.trim().toLowerCase() !== 'user' && rawName.trim().toLowerCase() !== 'un')
+    ? rawName.trim()
+    : (username !== 'user' ? username : 'User');
 
   return normalizeUser({
     id: row?.user_id,
@@ -10918,12 +11002,18 @@ const handleShareComplete = useCallback(
           comments: [],
         };
 
+        const isTargetStory = !!(targetPost?.story_id || targetPost?.item_type === 'story' || targetPost?.type === 'story' || targetPost?.kind === 'story');
+
         const newSharedItem = normalizePost({
           ...rawNewPost,
           author: rawNewPost.author || currentUser,
           user: rawNewPost.user || currentUser,
           shared_post: rawNewPost.shared_post || targetPost,
+          shared_story: isTargetStory ? (rawNewPost.shared_story || rawNewPost.shared_post || targetPost) : undefined,
           shared_post_id: rawNewPost.shared_post_id || targetPostId,
+          item_type: isTargetStory ? 'story_share' : rawNewPost.item_type,
+          source: isTargetStory ? 'story_share' : rawNewPost.source,
+          feed_key: isTargetStory ? `story_share:${rawNewPost.id}` : rawNewPost.feed_key,
         });
 
         setPosts((prev) => {

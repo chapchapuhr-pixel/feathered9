@@ -1309,14 +1309,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const whereStoryShares: string[] = [];
     const bindsStoryShares: any[] = [];
 
-    whereStoryShares.push(`COALESCE(st.is_deleted, 0) = 0`);
+    // Note: Do not filter on st.is_deleted since stories table has no is_deleted column
 
     if (cursor && cursor.trim()) {
       whereStoryShares.push(`ss.created_at < ?`);
       bindsStoryShares.push(cursor.trim());
     }
     if (seen.length > 0) {
-      whereStoryShares.push(`st.id NOT IN (${seen.map(() => "?").join(",")})`);
+      whereStoryShares.push(`ss.id NOT IN (${seen.map(() => "?").join(",")})`);
       bindsStoryShares.push(...seen);
     }
     if (seenKeys.length > 0) {
@@ -1342,7 +1342,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         NULL AS updated_at,
 
         NULL AS post_id,
-        NULL AS shared_post_id,
+        st.id AS shared_post_id,
+        st.id AS story_id,
         NULL AS reel_id,
         NULL AS song_id2,
         NULL AS event_id,
@@ -1354,7 +1355,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         'user_id' AS owner_field,
 
         COALESCE(su.username, 'user') AS username,
-        COALESCE(su.name, su.username, 'User') AS name,
+        COALESCE(NULLIF(trim(su.name), ''), NULLIF(trim(su.username), ''), 'User') AS name,
         CASE
           WHEN su.profile_image_url LIKE 'data:%' THEN NULL
           WHEN length(su.profile_image_url) > 300 THEN NULL
@@ -1368,9 +1369,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         COALESCE(su.is_verified, 0) AS is_verified,
         COALESCE(su.role, 'user') AS role,
 
-        '' AS content,
-        '' AS description,
-        NULL AS message,
+        COALESCE(ss.message, '') AS content,
+        COALESCE(ss.message, '') AS description,
+        ss.message AS message,
         'public' AS visibility,
         0 AS views, 0 AS shares,
 
@@ -1412,6 +1413,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
         json_object(
           'id', st.id,
+          'story_id', st.id,
           'user_id', st.user_id,
           'type', st.type,
           'media_url', st.media_url,
@@ -1425,11 +1427,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           'effect_id', st.effect_id,
           'duration', st.duration,
           'created_at', st.created_at,
+          'author_name', CASE
+            WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+            WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+            ELSE 'User'
+          END,
+          'author_full_name', u.name,
+          'author_username', u.username,
 
           'author', json_object(
             'id', st.user_id,
-            'name', COALESCE(u.name, u.username, ''),
-            'username', u.username,
+            'name', CASE
+              WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+              WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+              ELSE 'User'
+            END,
+            'username', COALESCE(u.username, ''),
             'avatar_url',
               CASE
                 WHEN u.profile_image_url LIKE 'data:%' THEN NULL
@@ -1449,8 +1462,12 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
           'user', json_object(
             'id', st.user_id,
-            'name', COALESCE(u.name, u.username, ''),
-            'username', u.username,
+            'name', CASE
+              WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+              WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+              ELSE 'User'
+            END,
+            'username', COALESCE(u.username, ''),
             'avatar_url',
               CASE
                 WHEN u.profile_image_url LIKE 'data:%' THEN NULL
@@ -2273,6 +2290,28 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
 
     let freshStoryShares: any[] = [];
     try {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS story_shares (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          story_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          destination TEXT DEFAULT 'feed',
+          message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+    } catch (_) {}
+    try {
+      await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN destination TEXT DEFAULT 'feed'`).run();
+    } catch (_) {}
+    try {
+      await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN message TEXT`).run();
+    } catch (_) {}
+    try {
+      await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP`).run();
+    } catch (_) {}
+
+    try {
       const res = await env.DB.prepare(
         `${baseSelectStoryShares} ${whereStorySharesSql} ORDER BY ss.created_at DESC LIMIT ?`
       )
@@ -2862,30 +2901,49 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
         }
         if (sst && typeof sst === "object") {
           const sstVerified = Boolean(
-            sst.author?.is_verified || sst.author?.verified
+            sst.author?.is_verified || sst.author?.verified || sst.is_verified || sst.verified
           );
+          const authorRaw = sst.author || sst.user || {};
+          const rawName = authorRaw?.name || sst.author_name || sst.author_full_name;
+          const cleanName = (typeof rawName === 'string' && rawName.trim().length > 0 && rawName.trim().toLowerCase() !== 'user' && rawName.trim().toLowerCase() !== 'un')
+            ? rawName.trim()
+            : (authorRaw?.username || sst.author_username || sst.username || 'User');
+
           const sstAuthor = {
-            id: sst.user_id || sst.author?.id,
-            name: sst.author?.name || sst.author_name || "User",
-            username: sst.author?.username || sst.author_username || "",
+            id: sst.user_id || authorRaw?.id,
+            name: cleanName,
+            username: authorRaw?.username || sst.author_username || sst.username || "",
             avatar_url:
-              sst.author?.avatar_url || sst.author?.profile_image_url || "",
+              authorRaw?.avatar_url || authorRaw?.profile_image_url || sst.author_image || "",
             profile_image_url:
-              sst.author?.profile_image_url || sst.author?.avatar_url || "",
+              authorRaw?.profile_image_url || authorRaw?.avatar_url || sst.author_image || "",
             is_verified: sstVerified,
             verified: sstVerified,
-            role: sst.author?.role || "user",
+            role: authorRaw?.role || sst.role || "user",
           };
           const normalizedStory = {
             ...sst,
+            id: Number(sst.id || sst.story_id || 0),
+            story_id: Number(sst.id || sst.story_id || 0),
+            item_type: 'story',
+            type: sst.type || 'story',
+            post_type: 'story',
+            kind: 'story',
             is_verified: sstVerified,
             verified: sstVerified,
             author: sstAuthor,
             user: sstAuthor,
+            author_name: cleanName,
+            author_full_name: cleanName,
+            author_username: sstAuthor.username,
+            author_image: sstAuthor.profile_image_url,
           };
           normalized.shared_story = normalizedStory;
           if (!normalized.shared_post) {
             normalized.shared_post = normalizedStory;
+          }
+          if (!normalized.shared_post_id) {
+            normalized.shared_post_id = normalizedStory.id;
           }
         }
       }

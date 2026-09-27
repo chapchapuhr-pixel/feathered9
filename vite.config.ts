@@ -480,6 +480,78 @@ function apiDevPlugin(): Plugin {
           });
         }
 
+        if ((pathname.startsWith('/api/stories/') && pathname.endsWith('/share')) || pathname === '/api/stories/share') {
+          const parts = pathname.split('/');
+          const storyId = Number(parts[3] || 0);
+          res.statusCode = 200;
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          return req.on('end', () => {
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const userId = Number(req.headers['x-user-id'] || parsed.user_id || 1);
+              const destination = parsed.destination || 'feed';
+              const message = parsed.message || parsed.content || '';
+              const origStory = parsed.shared_story || parsed.story || parsed.post || {
+                id: storyId,
+                story_id: storyId,
+                type: 'text',
+                text_content: 'Story content',
+                author: { id: 1, name: 'User', username: 'user' },
+              };
+              const shareId = Date.now();
+              const newSharePost = {
+                id: shareId,
+                post_id: shareId,
+                feed_key: `story_share:${shareId}`,
+                source: 'story_share',
+                item_type: 'story_share',
+                type: 'story_share',
+                post_type: 'story_share',
+                kind: 'story_share',
+                user_id: userId,
+                content: message,
+                description: message,
+                shared_post_id: storyId,
+                shared_story_id: storyId,
+                shared_story: origStory,
+                shared_post: origStory,
+                created_at: new Date().toISOString(),
+                shares: 0,
+                shares_count: 0,
+                reactions_count: 0,
+                comments_count: 0,
+                visibility: 'public',
+              };
+              if (destination === 'feed' || destination === 'profile') {
+                devPosts.unshift(newSharePost);
+              }
+              devShares.unshift({
+                id: shareId,
+                story_id: storyId,
+                user_id: userId,
+                destination,
+                message,
+                created_at: new Date().toISOString(),
+              });
+              return res.end(JSON.stringify({
+                success: true,
+                share_id: shareId,
+                post_id: shareId,
+                story_id: storyId,
+                destination,
+                shares: 1,
+                shares_count: 1,
+                post: newSharePost,
+                shared_post: origStory,
+                shared_story: origStory,
+              }));
+            } catch {
+              return res.end(JSON.stringify({ success: true, shares: 1, shares_count: 1 }));
+            }
+          });
+        }
+
         if ((pathname.startsWith('/api/products/') && pathname.endsWith('/share')) || pathname === '/api/products/share') {
           const parts = pathname.split('/');
           const productId = Number(parts[3] || 0);

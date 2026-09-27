@@ -110,15 +110,54 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
   }, [isOpen, subModal]);
 
   const ownerAuthor = useMemo(() => {
-    return (
-      post?.author || {
-        name: post?.author_name || post?.user?.name || 'User',
-        username: post?.author_username || post?.user?.username || 'user',
-        profile_image_url: post?.author_avatar || post?.user?.profile_image_url || null,
-        is_verified: Boolean(post?.author_verified || post?.user?.is_verified),
-      }
-    );
-  }, [post]);
+    const rawAuthor = post?.author;
+    const rawUser = post?.user;
+    const authorObj = typeof rawAuthor === 'object' && rawAuthor !== null ? rawAuthor : null;
+    const userObj = typeof rawUser === 'object' && rawUser !== null ? rawUser : null;
+    const authorId = Number(authorObj?.id || userObj?.id || post?.user_id || post?.seller_id || post?.uploader_id || 0);
+    const matchedUser = authorId ? users?.find((u) => Number(u.id) === authorId) : null;
+
+    return {
+      id: authorId,
+      name:
+        matchedUser?.name ||
+        authorObj?.name ||
+        userObj?.name ||
+        (typeof rawAuthor === 'string' && rawAuthor !== 'User' ? rawAuthor : null) ||
+        post?.author_name ||
+        post?.author_full_name ||
+        matchedUser?.username ||
+        authorObj?.username ||
+        userObj?.username ||
+        post?.author_username ||
+        post?.username ||
+        'User',
+      username:
+        matchedUser?.username ||
+        authorObj?.username ||
+        userObj?.username ||
+        post?.author_username ||
+        post?.username ||
+        'user',
+      profile_image_url:
+        matchedUser?.profile_image_url ||
+        matchedUser?.avatar_url ||
+        authorObj?.profile_image_url ||
+        authorObj?.avatar_url ||
+        userObj?.profile_image_url ||
+        userObj?.avatar_url ||
+        post?.author_avatar ||
+        post?.author_image ||
+        null,
+      is_verified: Boolean(
+        matchedUser?.is_verified ||
+        authorObj?.is_verified ||
+        userObj?.is_verified ||
+        post?.author_verified ||
+        post?.is_verified
+      ),
+    };
+  }, [post, users]);
 
   const authorName = ownerAuthor.name || 'User';
 
@@ -231,10 +270,21 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         post?.source === 'group_post' ||
         post?.group_id
       );
+      const isStory = Boolean(
+        post?.item_type === 'story' ||
+        post?.source === 'story' ||
+        post?.type === 'story' ||
+        post?.post_type === 'story' ||
+        post?.kind === 'story' ||
+        post?.story_id
+      );
 
       const itemId = Number(post?.id ?? post?.post_id ?? 0);
       let endpoint = `/api/posts/${itemId}/share`;
-      if (isProduct) {
+      if (isStory) {
+        const storyId = Number(post?.story_id || post?.id || 0);
+        endpoint = `/api/stories/${storyId}/share`;
+      } else if (isProduct) {
         const prodId = Number(post?.product_id || post?.id || 0);
         endpoint = `/api/products/${prodId}/share`;
       } else if (isEvent) {
@@ -249,7 +299,9 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         endpoint = `/api/podcasts/${itemId}/share`;
       }
 
-      const itemType = isProduct
+      const itemType = isStory
+        ? 'story'
+        : isProduct
         ? 'product'
         : isEvent
         ? 'event'
@@ -274,6 +326,9 @@ export const ShareScreen: React.FC<ShareScreenProps> = ({
         location: location || undefined,
         audience,
       };
+      if (isStory) {
+        payload.story_id = Number(post?.story_id || post?.id || 0);
+      }
       if (isProduct) {
         payload.product_id = Number(post?.product_id || post?.id || 0);
       }

@@ -640,6 +640,165 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       LIMIT ?
     `;
 
+    // ---------------- STORY SHARES ----------------
+    const qStoryShares = `
+      SELECT
+        'story_share' AS source,
+        'story_share' AS item_type,
+        ss.id AS id,
+        ('story_share:' || CAST(ss.id AS TEXT)) AS feed_key,
+        ss.created_at AS created_at,
+        NULL AS updated_at,
+
+        NULL AS post_id,
+        st.id AS shared_post_id,
+        st.id AS story_id,
+        NULL AS reel_id,
+        NULL AS song_id2,
+        NULL AS event_id,
+        NULL AS group_post_id,
+        NULL AS product_id2,
+        NULL AS product_id,
+
+        ss.user_id AS user_id,
+        ss.user_id AS owner_id,
+        'user_id' AS owner_field,
+
+        COALESCE(su.username, 'user') AS username,
+        COALESCE(NULLIF(TRIM(su.name), ''), NULLIF(TRIM(su.username), ''), 'User') AS name,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS profile_image_url,
+
+        CASE
+          WHEN su.profile_image_url LIKE 'data:%' THEN NULL
+          WHEN length(su.profile_image_url) > 300 THEN NULL
+          ELSE su.profile_image_url
+        END AS avatar_url,
+
+        COALESCE(su.is_verified, 0) AS is_verified,
+        COALESCE(su.role, 'user') AS role,
+
+        COALESCE(ss.message, '') AS content,
+        COALESCE(ss.message, '') AS description,
+        'public' AS visibility,
+        0 AS views,
+        0 AS shares,
+
+        NULL AS media_url,
+        NULL AS media_type,
+        NULL AS media_urls,
+        NULL AS media_types,
+        NULL AS media_meta,
+
+        (SELECT COUNT(*) FROM story_comments sc WHERE sc.story_id = st.id AND COALESCE(sc.is_deleted, 0) = 0) AS comments_count,
+        (SELECT COUNT(*) FROM story_reactions sr WHERE sr.story_id = st.id) AS reactions_count,
+        (SELECT sr.reaction FROM story_reactions sr WHERE sr.story_id = st.id AND sr.user_id = ? LIMIT 1) AS my_reaction,
+        (SELECT 1 FROM story_reactions sr WHERE sr.story_id = st.id AND sr.user_id = ? LIMIT 1) AS liked_by_me,
+
+        'story_share' AS type,
+        'story_share' AS post_type,
+        'story_share' AS kind,
+        json_object(
+          'kind', 'story_share',
+          'type', 'story_share',
+          'share_id', ss.id,
+          'original_story_id', st.id,
+          'destination', ss.destination,
+          'message', ss.message,
+          'description', ss.message
+        ) AS meta,
+
+        json_object(
+          'id', st.id,
+          'story_id', st.id,
+          'user_id', st.user_id,
+          'type', st.type,
+          'media_url', st.media_url,
+          'text_content', st.text_content,
+          'background_style', st.background_style,
+          'music_url', st.music_url,
+          'music_title', st.music_title,
+          'media_urls', st.media_urls,
+          'media_types', st.media_types,
+          'media_meta', st.media_meta,
+          'effect_id', st.effect_id,
+          'duration', st.duration,
+          'created_at', st.created_at,
+          'author_name', CASE
+            WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+            WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+            ELSE 'User'
+          END,
+          'author_full_name', u.name,
+          'author_username', u.username,
+          'author', json_object(
+            'id', st.user_id,
+            'name', CASE
+              WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+              WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+              ELSE 'User'
+            END,
+            'username', COALESCE(u.username, ''),
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'role', COALESCE(u.role, 'user')
+          ),
+          'user', json_object(
+            'id', st.user_id,
+            'name', CASE
+              WHEN u.name IS NOT NULL AND trim(u.name) != '' AND lower(trim(u.name)) != 'user' THEN trim(u.name)
+              WHEN u.username IS NOT NULL AND trim(u.username) != '' THEN trim(u.username)
+              ELSE 'User'
+            END,
+            'username', COALESCE(u.username, ''),
+            'avatar_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'profile_image_url',
+              CASE
+                WHEN u.profile_image_url LIKE 'data:%' THEN NULL
+                WHEN length(u.profile_image_url) > 300 THEN NULL
+                ELSE u.profile_image_url
+              END,
+            'is_verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END,
+            'verified', CASE WHEN COALESCE(u.is_verified, 0) = 1 THEN json('true') ELSE json('false') END
+          )
+        ) AS shared_story,
+
+        NULL AS shared_post,
+        NULL AS group_id,
+        NULL AS group_name,
+        NULL AS group_image
+
+      FROM story_shares ss
+      JOIN stories st ON st.id = ss.story_id
+      LEFT JOIN users su ON su.id = ss.user_id
+      LEFT JOIN users u ON u.id = st.user_id
+      WHERE ss.user_id = ?
+        ${cursor ? `AND ss.created_at < ?` : ""}
+      ORDER BY ss.created_at DESC
+      LIMIT ?
+    `;
+
     // ---------------- PRODUCT SHARES ----------------
     const qProductShares = `
       SELECT
@@ -1261,12 +1420,48 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       }
     };
 
-    const [postsRes, sharesResults, productSharesResults, songSharesResults, songsRes, productsRes] =
+    const runStoryShares = async () => {
+      try {
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS story_shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            destination TEXT DEFAULT 'feed',
+            message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+      } catch (_) {}
+      try {
+        await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN destination TEXT DEFAULT 'feed'`).run();
+      } catch (_) {}
+      try {
+        await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN message TEXT`).run();
+      } catch (_) {}
+      try {
+        await env.DB.prepare(`ALTER TABLE story_shares ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP`).run();
+      } catch (_) {}
+
+      try {
+        const res = await env.DB
+          .prepare(qStoryShares)
+          .bind(...bindCursor([viewerId || 0, viewerId || 0, userId]))
+          .all();
+        return Array.isArray(res?.results) ? res.results : [];
+      } catch (err) {
+        console.warn("by-user qStoryShares query fallback:", err);
+        return [];
+      }
+    };
+
+    const [postsRes, sharesResults, productSharesResults, songSharesResults, storySharesResults, songsRes, productsRes] =
       await Promise.all([
         env.DB.prepare(qPosts).bind(...bindCursor([viewerId || 0, userId])).all(),
         runShares(),
         runProductShares(),
         runSongShares(),
+        runStoryShares(),
         env.DB.prepare(qSongs).bind(...bindCursor([viewerId || 0, userId])).all(),
         env.DB.prepare(qProducts).bind(...bindCursor([viewerId || 0, userId])).all(),
       ]);
@@ -1276,6 +1471,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       ...sharesResults,
       ...productSharesResults,
       ...songSharesResults,
+      ...storySharesResults,
       ...(Array.isArray(songsRes.results) ? songsRes.results : []),
       ...(Array.isArray(productsRes.results) ? productsRes.results : []),
     ];
@@ -1620,6 +1816,65 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
           if (!it.shared_post) it.shared_post = sNorm;
           if (!it.shared_post_id) it.shared_post_id = sNorm.id;
           if (!it.song_id) it.song_id = sNorm.id;
+        }
+      }
+
+      // ============================================================
+      // Normalize shared_story
+      // ============================================================
+      if (it?.shared_story) {
+        let sst = it.shared_story;
+        if (typeof sst === "string") {
+          try {
+            sst = JSON.parse(sst);
+          } catch {
+            sst = null;
+          }
+        }
+        if (sst && typeof sst === "object") {
+          const sstVerified = toBooleanVerified(
+            sst.author?.is_verified ?? sst.is_verified
+          );
+          const authorRaw = sst.author || sst.user || {};
+          const rawName = authorRaw?.name || sst.author_name || sst.author_full_name;
+          const cleanName = (typeof rawName === 'string' && rawName.trim().length > 0 && rawName.trim().toLowerCase() !== 'user' && rawName.trim().toLowerCase() !== 'un')
+            ? rawName.trim()
+            : (authorRaw?.username || sst.author_username || sst.username || 'User');
+
+          const sstAuthor = {
+            id: sst.user_id || authorRaw?.id,
+            name: cleanName,
+            username: authorRaw?.username || sst.author_username || sst.username || "",
+            avatar_url:
+              authorRaw?.avatar_url || authorRaw?.profile_image_url || sst.author_image || "",
+            profile_image_url:
+              authorRaw?.profile_image_url || authorRaw?.avatar_url || sst.author_image || "",
+            is_verified: sstVerified,
+            verified: sstVerified,
+            role: authorRaw?.role || sst.role || "user",
+          };
+
+          const sNorm = {
+            ...sst,
+            id: Number(sst.id || sst.story_id || 0),
+            story_id: Number(sst.id || sst.story_id || 0),
+            is_verified: sstVerified,
+            verified: sstVerified,
+            author: sstAuthor,
+            user: sstAuthor,
+            author_name: cleanName,
+            author_full_name: cleanName,
+            author_username: sstAuthor.username,
+            author_image: sstAuthor.profile_image_url,
+            item_type: "story",
+            type: sst.type || "story",
+            post_type: "story",
+            kind: "story",
+          };
+
+          it.shared_story = sNorm;
+          if (!it.shared_post) it.shared_post = sNorm;
+          if (!it.shared_post_id) it.shared_post_id = sNorm.id;
         }
       }
     });

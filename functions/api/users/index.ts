@@ -79,11 +79,15 @@ export const onRequest: PagesFunction<Env> = async ({ request, env }) => {
 
       // ✅ LIST: /api/users
       if (!id && !username) {
+        try {
+          await env.DB.prepare(`ALTER TABLE users ADD COLUMN name TEXT`).run();
+        } catch (_) {}
+
         const { results } = await env.DB
           .prepare(
             `
             SELECT
-              id, username, email,
+              id, name, username, email,
               profile_image_url, cover_image_url,
               bio, work, education, location, website,
               birth_date, gender, nationality,
