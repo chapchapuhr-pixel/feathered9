@@ -11004,16 +11004,26 @@ const handleShareComplete = useCallback(
 
         const isTargetStory = !!(targetPost?.story_id || targetPost?.item_type === 'story' || targetPost?.type === 'story' || targetPost?.kind === 'story');
 
+        const rawShared = rawNewPost.shared_post || data?.shared_post || data?.data?.shared_post || targetPost;
+        const resolvedSharedPost = rawShared ? {
+          ...rawShared,
+          video_url: rawShared.video_url || rawShared.video_url_medium || rawShared.video_url_hd || rawShared.video || targetPost?.video_url || targetPost?.video,
+          media_url: rawShared.media_url || rawShared.video_url || targetPost?.media_url || targetPost?.video_url,
+          thumbnail_url: rawShared.thumbnail_url || targetPost?.thumbnail_url,
+          caption: rawShared.caption || rawShared.content || targetPost?.caption || targetPost?.content || '',
+          author: rawShared.author || targetPost?.author,
+        } : null;
+
         const newSharedItem = normalizePost({
           ...rawNewPost,
           author: rawNewPost.author || currentUser,
           user: rawNewPost.user || currentUser,
-          shared_post: rawNewPost.shared_post || targetPost,
-          shared_story: isTargetStory ? (rawNewPost.shared_story || rawNewPost.shared_post || targetPost) : undefined,
+          shared_post: resolvedSharedPost,
+          shared_story: isTargetStory ? (rawNewPost.shared_story || resolvedSharedPost) : undefined,
           shared_post_id: rawNewPost.shared_post_id || targetPostId,
-          item_type: isTargetStory ? 'story_share' : rawNewPost.item_type,
-          source: isTargetStory ? 'story_share' : rawNewPost.source,
-          feed_key: isTargetStory ? `story_share:${rawNewPost.id}` : rawNewPost.feed_key,
+          item_type: isTargetStory ? 'story_share' : (rawNewPost.item_type || 'share'),
+          source: isTargetStory ? 'story_share' : (rawNewPost.source || 'share'),
+          feed_key: isTargetStory ? `story_share:${rawNewPost.id}` : (rawNewPost.feed_key || `share:${rawNewPost.id}`),
         });
 
         setPosts((prev) => {

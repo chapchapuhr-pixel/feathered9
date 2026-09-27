@@ -40,6 +40,7 @@ import {
 } from '../utils/dataCache';
 import { CommentActionModal, useCommentLongPress } from './CommentActionModal';
 import { InstagramVideoCard } from './InstagramVideoCard';
+import { InstagramVideoShareCard } from './InstagramVideoShareCard';
 import { SavePostButton } from './SavePostButton';
 import { imageCache, observeForThumbnail, observeForFeed } from '../utils/imageCache';
 import { ShareScreen } from './ShareScreen';
@@ -2109,6 +2110,8 @@ export const ShareBottomSheet = memo(
             }
           : {
               ...getSharePayload(destination),
+              post: post,
+              shared_post: post,
               message: msg,
               feeling: feeling || undefined,
               location: location || undefined,
@@ -2146,7 +2149,7 @@ export const ShareBottomSheet = memo(
               feeling: feeling || undefined,
               location: location || undefined,
               taggedUsers: taggedFriends.length > 0 ? taggedFriends : undefined,
-              shared_post_id: post.id,
+              shared_post_id: post.id || post.post_id || post.reel_id || getFeedItemId(post),
               shared_post: post,
               created_at: new Date().toISOString(),
               shares: 0,
@@ -4842,7 +4845,7 @@ const GroupPostHeader = memo(
 );
 
 // ==================== EXPANDABLE RICH TEXT (internal) ====================
-const ExpandableRichText = memo(
+export const ExpandableRichText = memo(
   ({
     text,
     users,
@@ -6944,11 +6947,19 @@ export const Post = memo(
       p.type === 'share' ||
       p.post_type === 'share'
     );
+    const parsedSharedPost = useMemo(() => {
+      let sp = p.shared_post;
+      if (typeof sp === 'string') {
+        try { sp = JSON.parse(sp); } catch { sp = null; }
+      }
+      return sp;
+    }, [p.shared_post]);
+
     const originalPost =
       p.shared_story ||
       p.shared_song ||
       p.shared_product ||
-      p.shared_post ||
+      parsedSharedPost ||
       (p.shared_post_id && (p as any)._originalPost) ||
       (isSharedSong ? {
         id: p.song_id2 || p.song_id || p.id,
@@ -7043,6 +7054,13 @@ export const Post = memo(
 
     const origMediaInfo = useMemo(() => {
       if (!originalPost || isSharedSong) return null;
+      const directVideo =
+        originalPost.video_url ||
+        originalPost.video_url_medium ||
+        originalPost.video_url_hd ||
+        originalPost.video_url_low ||
+        originalPost.video ||
+        null;
       const rawUrls = Array.isArray(originalPost.media_urls)
         ? originalPost.media_urls
         : typeof originalPost.media_urls === 'string'
@@ -7055,16 +7073,23 @@ export const Post = memo(
         ? [originalPost.media_url]
         : [];
       const urls: string[] = rawUrls.filter(Boolean);
+      if (directVideo && !urls.includes(directVideo)) {
+        urls.unshift(directVideo);
+      }
       const isVid = Boolean(
-        originalPost.video_url ||
+        directVideo ||
         originalPost.media_type === 'video' ||
         originalPost.type === 'video' ||
+        originalPost.type === 'reel' ||
+        originalPost.post_type === 'reel' ||
+        originalPost.item_type === 'reel' ||
+        originalPost.kind === 'reel' ||
         (typeof urls[0] === 'string' && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(urls[0]))
       );
       return {
         urls,
         isVideo: isVid,
-        videoUrl: originalPost.video_url || (isVid ? urls[0] : null),
+        videoUrl: directVideo || (isVid ? urls[0] : null),
       };
     }, [originalPost, isSharedSong]);
 
@@ -7086,6 +7111,27 @@ export const Post = memo(
       p.post_type === 'product_share' ||
       p.source === 'product_share' ||
       p.product_id != null
+    );
+
+    const isSharedVideo = Boolean(
+      !isSharedSong &&
+      !isSharedProduct &&
+      !isSharedStory &&
+      (
+        origMediaInfo?.isVideo ||
+        Boolean(origMediaInfo?.videoUrl) ||
+        Boolean(originalPost?.video_url) ||
+        Boolean(originalPost?.video_url_medium) ||
+        Boolean(originalPost?.video_url_hd) ||
+        Boolean(originalPost?.video) ||
+        originalPost?.type === 'reel' ||
+        originalPost?.post_type === 'reel' ||
+        originalPost?.item_type === 'reel' ||
+        originalPost?.kind === 'reel' ||
+        originalPost?.media_type === 'video' ||
+        originalPost?.type === 'video' ||
+        (typeof originalPost?.media_url === 'string' && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(originalPost.media_url))
+      )
     );
 
     const sharedSongData = useMemo(() => {
@@ -7366,6 +7412,7 @@ export const Post = memo(
     if (
       !isGroupPost &&
       !isMarketplace &&
+      !isSharedPost &&
       (isVideoPost(p) || (videoMedia.length > 0 && !imageMedia.length) || p.media_type === 'video' || p.type === 'video' || p.type === 'reel' || p.post_type === 'reel' || p.kind === 'reel')
     ) {
       return (
@@ -7402,6 +7449,20 @@ export const Post = memo(
               onCommentAdded={() => setCommentCount((c) => c + 1)}
             />
           </article>
+          <ShareBottomSheet
+            isOpen={showShareSheet}
+            onClose={() => setShowShareSheet(false)}
+            post={{
+              ...p,
+              source: 'post',
+            }}
+            currentUser={currentUser || null}
+            users={users}
+            groups={groups}
+            brands={brands}
+            chats={chats}
+            onShareComplete={handleShareComplete}
+          />
         </div>
       );
     }
@@ -7648,13 +7709,23 @@ export const Post = memo(
             })()}
 
             {isSharedPost && (
-              <div 
-                className="mx-3 md:mx-4 mb-3 border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden shadow-sm hover:border-[#475569] transition-all"
-              >
+              <div className="mx-3 md:mx-4 mb-3">
                 {originalPost ? (
-                  <>
-                    {/* Owner Header */}
-                    <div className="p-3 md:p-3.5 flex items-center justify-between border-b border-[#1E293B]/60 bg-[#0F172A]/50">
+                  isSharedVideo ? (
+                    <InstagramVideoShareCard
+                      post={p}
+                      originalPost={originalPost}
+                      ownerAuthor={ownerAuthor}
+                      currentUser={currentUser}
+                      users={users}
+                      onProfileClick={onProfileClick}
+                      onVideoClick={onVideoClick}
+                      onHashtagClick={onHashtagClick}
+                    />
+                  ) : (
+                    <div className="border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden shadow-sm hover:border-[#475569] transition-all">
+                      {/* Owner Header */}
+                      <div className="p-3 md:p-3.5 flex items-center justify-between border-b border-[#1E293B]/60 bg-[#0F172A]/50">
                       <div
                         className="flex items-center gap-2.5 min-w-0 cursor-pointer"
                         onClick={(e) => {
@@ -7964,9 +8035,9 @@ export const Post = memo(
                         </button>
                       </div>
                     )}
-                  </>
-                ) : p.shared_post_id ? (
-                  <div className="p-4 flex items-center justify-between">
+                  </div>
+                )) : p.shared_post_id ? (
+                  <div className="border border-[#334155] bg-[#0A101F] rounded-2xl overflow-hidden p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-[#1877F2]/10 flex items-center justify-center text-[#1877F2]">
                         <i className="fas fa-link text-lg"></i>

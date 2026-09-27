@@ -204,10 +204,14 @@ const normalizeMedia = (row: any) => {
       full_url: meta[0]?.full || null,
     };
   }
-  const single = cleanUrl(row?.media_url);
+  const directVid = cleanUrl(row?.video_url || row?.video_url_medium || row?.video_url_hd || row?.video || null);
+  const single = cleanUrl(row?.media_url) || directVid;
   const urls = parseJsonArrayUrls(row?.media_urls);
   const rawImages = parseJsonArrayUrls(row?.images);
   const combinedUrls = urls.length ? urls : rawImages;
+  if (directVid && !combinedUrls.includes(directVid)) {
+    combinedUrls.unshift(directVid);
+  }
   const outUrls = combinedUrls.length ? combinedUrls : single ? [single] : [];
   const types = parseJsonArrayStrings(row?.media_types);
   let outTypes = types.length ? types : [];
@@ -226,6 +230,7 @@ const normalizeMedia = (row: any) => {
   return {
     media,
     media_url: single || outUrls[0] || null,
+    video_url: directVid || (outTypes[0] === 'video' ? outUrls[0] : null) || row?.video_url || null,
     media_urls: outUrls,
     media_types: outTypes,
     images: outUrls,

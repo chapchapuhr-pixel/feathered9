@@ -58,6 +58,34 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
       .first<any>();
 
     if (!post) {
+      try {
+        const reel = await env.DB
+          .prepare(`SELECT * FROM reels WHERE id = ? LIMIT 1`)
+          .bind(postId)
+          .first<any>();
+        if (reel) {
+          post = {
+            ...reel,
+            id: reel.id,
+            post_id: reel.id,
+            reel_id: reel.id,
+            user_id: reel.user_id,
+            content: reel.caption || '',
+            description: reel.caption || '',
+            caption: reel.caption || '',
+            video_url: reel.video_url || reel.video_url_medium || reel.video_url_hd || reel.video_url_low,
+            media_url: reel.video_url || reel.video_url_medium || reel.video_url_hd || reel.video_url_low,
+            thumbnail_url: reel.thumbnail_url,
+            song_name: reel.song_name,
+            type: 'reel',
+            post_type: 'reel',
+            media_type: 'video',
+          };
+        }
+      } catch (_) {}
+    }
+
+    if (!post) {
       if (body?.post || body?.shared_post) {
         post = body.post || body.shared_post;
       } else {
@@ -186,14 +214,20 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, params }
 
       const sharedPostPayload = {
         ...post,
-        author: author || post?.author || {
+        video_url: post?.video_url || post?.media_url || (body?.post?.video_url) || (body?.shared_post?.video_url) || null,
+        media_url: post?.media_url || post?.video_url || (body?.post?.media_url) || (body?.shared_post?.media_url) || null,
+        thumbnail_url: post?.thumbnail_url || (body?.post?.thumbnail_url) || (body?.shared_post?.thumbnail_url) || null,
+        caption: post?.caption || post?.content || (body?.post?.caption) || '',
+        content: post?.content || post?.caption || (body?.post?.content) || '',
+        song_name: post?.song_name || (body?.post?.song_name) || undefined,
+        author: author || post?.author || (body?.post?.author) || {
           id: post?.user_id,
           name: post?.author_name || 'User',
           username: post?.author_username || '',
           avatar_url: post?.author_avatar || '',
           profile_image_url: post?.author_avatar || '',
         },
-        user: author || post?.user,
+        user: author || post?.user || (body?.post?.user),
       };
 
       createdSharedPost = {

@@ -348,8 +348,89 @@ function apiDevPlugin(): Plugin {
         }
 
         if (pathname.includes('/api/reels/') && pathname.endsWith('/share')) {
+          const parts = pathname.split('/');
+          const reelId = Number(parts[3] || 0);
           res.statusCode = 200;
-          return res.end(JSON.stringify({ success: true, shares: 1 }));
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          return req.on('end', () => {
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const origReel = parsed.shared_post || parsed.post || devPosts.find((p) => Number(p.id) === reelId) || {
+                id: reelId,
+                reel_id: reelId,
+                type: 'reel',
+                media_type: 'video',
+                video_url: parsed.video_url || '',
+                caption: parsed.caption || '',
+              };
+              const newSharedPost = {
+                id: Date.now(),
+                post_id: Date.now(),
+                user_id: parsed.user_id || 1,
+                content: parsed.message || parsed.content || '',
+                description: parsed.message || parsed.content || '',
+                message: parsed.message || parsed.content || '',
+                feeling: parsed.feeling || undefined,
+                location: parsed.location || undefined,
+                audience: parsed.audience || 'Public',
+                shared_post_id: reelId,
+                shared_post: {
+                  ...origReel,
+                  video_url: origReel.video_url || origReel.media_url,
+                  media_url: origReel.media_url || origReel.video_url,
+                  description: origReel.description || origReel.content || origReel.caption || '',
+                  is_verified: Boolean(origReel.is_verified || origReel.author?.is_verified),
+                  verified: Boolean(origReel.is_verified || origReel.author?.is_verified),
+                },
+                is_verified: false,
+                verified: false,
+                author: {
+                  id: parsed.user_id || 1,
+                  name: 'You',
+                  username: 'you',
+                  is_verified: false,
+                  verified: false,
+                },
+                user: {
+                  id: parsed.user_id || 1,
+                  name: 'You',
+                  username: 'you',
+                  is_verified: false,
+                  verified: false,
+                },
+                created_at: new Date().toISOString(),
+                shares: 0,
+                shares_count: 0,
+                likes_count: 0,
+                reactions_count: 0,
+                comments_count: 0,
+              };
+              const shareRecord = {
+                id: Date.now(),
+                post_id: reelId,
+                user_id: parsed.user_id || 1,
+                destination: parsed.destination || 'feed',
+                message: parsed.message || parsed.content || '',
+                created_at: new Date().toISOString(),
+              };
+              devShares.unshift(shareRecord);
+              if (parsed.destination === 'feed' || parsed.destination === 'profile') {
+                devPosts.unshift(newSharedPost);
+              }
+              return res.end(JSON.stringify({
+                success: true,
+                share_id: shareRecord.id,
+                post_id: reelId,
+                shares: 1,
+                shares_count: 1,
+                post: newSharedPost,
+                shared_post: origReel,
+              }));
+            } catch {
+              return res.end(JSON.stringify({ success: true, shares: 1, shares_count: 1 }));
+            }
+          });
         }
 
         // Standard Post Endpoints: React, Reactions, Share, Comments
@@ -424,7 +505,10 @@ function apiDevPlugin(): Plugin {
                 shared_post_id: postId,
                 shared_post: origPost ? {
                   ...origPost,
-                  description: origPost.description || origPost.content || '',
+                  video_url: origPost.video_url || origPost.media_url,
+                  media_url: origPost.media_url || origPost.video_url,
+                  thumbnail_url: origPost.thumbnail_url || origPost.cover_url,
+                  description: origPost.description || origPost.content || origPost.caption || '',
                   is_verified: Boolean(origPost.is_verified || origPost.author?.is_verified),
                   verified: Boolean(origPost.is_verified || origPost.author?.is_verified),
                 } : null,

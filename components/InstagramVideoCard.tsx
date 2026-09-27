@@ -9,6 +9,8 @@ import {
   topReactionEmojis,
   formatReactionText,
   pickStableReactorName,
+  ShareBottomSheet,
+  safeNumber,
 } from './Feed';
 import { useIsPostSaved, toggleSavePost } from '../utils/savedPosts';
 import { VerifiedBadge } from './VerifiedBadge';
@@ -230,6 +232,7 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
   );
   const [reactionCount, setReactionCount] = useState<number>(initialReactionCount);
   const [showReactionsSheet, setShowReactionsSheet] = useState(false);
+  const [showShareSheet, setShowShareSheet] = useState(false);
 
   // Sync state if props or activePost changes
   useEffect(() => {
@@ -1014,64 +1017,7 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
       return;
     }
 
-    const nextCount = sharesCount + 1;
-    setSharesCount(nextCount);
-
-    // Call standard post share endpoint: POST /api/posts/${postId}/share
-    let shareRes: any = null;
-    try {
-      const res = await apiFetch(`/api/posts/${activePostId}/share`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': String(currentUser?.id || 1),
-        },
-        body: JSON.stringify({
-          destination: 'feed',
-          user_id: currentUser?.id || 1,
-          post_id: activePostId,
-        }),
-      });
-      shareRes = res;
-
-      if (res && (typeof res.shares === 'number' || typeof res.shares_count === 'number')) {
-        setSharesCount(res.shares ?? res.shares_count);
-      }
-    } catch (err) {
-      console.warn('Post share endpoint error:', err);
-    }
-
-    if (onShare) {
-      try {
-        onShare(activePostId, nextCount, shareRes, activePost);
-      } catch (err) {
-        console.warn('onShare callback error:', err);
-      }
-    }
-
-    // Native Web Share if available
-    const shareUrl = `${window.location.origin}/?post=${activePostId}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `${authorName} on UNERA`,
-          text: activePost.content || 'Check out this video on UNERA!',
-          url: shareUrl,
-        });
-        return;
-      } catch (e) {
-        // User cancelled or share failed, fallback to copy
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
-    } catch (err) {
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
-    }
+    setShowShareSheet(true);
   };
 
   // Parse hashtags & mentions
@@ -1783,6 +1729,22 @@ export const InstagramVideoCard: React.FC<InstagramVideoCardProps> = ({
           <span>{toastMessage}</span>
         </div>
       )}
+      {/* Share Bottom Sheet Modal */}
+      <ShareBottomSheet
+        isOpen={showShareSheet}
+        onClose={() => setShowShareSheet(false)}
+        post={activePost}
+        currentUser={currentUser || null}
+        users={users}
+        onShareComplete={(destination, data) => {
+          const nextCount = safeNumber(data?.shares ?? data?.share_count, sharesCount + 1);
+          setSharesCount(nextCount);
+          if (onShare) {
+            onShare(activePostId, nextCount, data, activePost);
+          }
+          setShowShareSheet(false);
+        }}
+      />
     </div>
   );
 };
