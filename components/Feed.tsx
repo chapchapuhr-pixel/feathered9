@@ -2947,7 +2947,7 @@ interface FeedStoryCardProps {
   chats?: any[];
   onReact?: (storyId: number, type: ReactionType) => void;
   onOpenComments?: (story: any) => void;
-  onShare?: (story: any) => void;
+  onShare?: (story: any, destination?: string, data?: any) => void;
   onProfileClick?: (userId: number) => void;
 }
 
@@ -3021,7 +3021,20 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
     if (story?.shares_count !== undefined) {
       setSharesCount(Number(story.shares_count));
     }
-  }, [story?.my_reaction, story?.liked_by_me, story?.reactions_count, story?.comments_count, story?.shares_count]);
+
+    if (!storyId) return;
+    const viewerParam = currentUser?.id ? `?viewerId=${currentUser.id}` : '';
+    fetch(`/api/stories/${storyId}/comments${viewerParam}`, {
+      headers: currentUser?.id ? { 'x-user-id': String(currentUser.id) } : undefined,
+    })
+      .then((res) => res.json())
+      .then((data: any) => {
+        const list = Array.isArray(data?.comments) ? data.comments : (Array.isArray(data) ? data : []);
+        const count = typeof data?.count === 'number' ? data.count : list.length;
+        setCommentsCount(count);
+      })
+      .catch(() => {});
+  }, [storyId, story?.my_reaction, story?.liked_by_me, story?.reactions_count, story?.comments_count, story?.shares_count, currentUser?.id]);
 
   const normalizedStoryPost = useMemo(() => {
     return {
@@ -3095,7 +3108,7 @@ const FeedStoryCard: React.FC<FeedStoryCardProps> = ({
     const nextShares = safeNumber(data?.shares ?? data?.share_count, NaN);
     const finalShares = Number.isFinite(nextShares) ? nextShares : sharesCount + 1;
     setSharesCount(finalShares);
-    onShare?.(normalizedStoryPost);
+    onShare?.(normalizedStoryPost, destination, data);
     setShowShareSheet(false);
   };
 
@@ -7539,10 +7552,10 @@ export const Post = memo(
                     )}
 
                     {/* Owner Description / Content */}
-                    {!isSharedSong && (originalPost.description || originalPost.content) && (
+                    {!isSharedSong && (originalPost.description || originalPost.content || originalPost.text_content) && (
                       <div className="p-3 md:p-3.5 text-[#F8FAFC]">
                         <ExpandableRichText
-                          text={originalPost.description || originalPost.content}
+                          text={originalPost.description || originalPost.content || originalPost.text_content}
                           users={users}
                           onProfileClick={onProfileClick}
                           onHashtagClick={onHashtagClick}
@@ -11443,7 +11456,7 @@ export const Feed = memo(({
                 };
                 onOpenComments(storyPost as any);
               }}
-              onShare={(s) => {
+              onShare={(s, destination, data) => {
                 const storyPost = {
                   ...(s || item.data),
                   id: (s || item.data).id,
@@ -11454,8 +11467,8 @@ export const Feed = memo(({
                 };
                 onShare(
                   storyPost.id,
-                  safeNumber(storyPost.shares ?? storyPost.shares_count, 0),
-                  undefined,
+                  safeNumber(data?.shares ?? storyPost.shares ?? storyPost.shares_count, 0),
+                  data,
                   storyPost
                 );
               }}

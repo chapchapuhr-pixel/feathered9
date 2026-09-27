@@ -365,6 +365,10 @@ export interface Story {
   // extra story stats used in UI
   views_count?: number;
   reactions_count?: number;
+  comments_count?: number;
+  discussions_count?: number;
+  shares_count?: number;
+  shares?: number;
   my_reaction?: ReactionType | null;
   reaction_breakdown?: Record<string, number>;
   is_active?: boolean;

@@ -98,6 +98,19 @@ const getFeedItemType = (item: any): string => {
   
   const meta = item?.meta || {};
   
+  if (
+    item?.kind === 'story' ||
+    item?.source === 'story' ||
+    item?.item_type === 'story' ||
+    item?.type === 'story' ||
+    item?.post_type === 'story' ||
+    meta?.kind === 'story' ||
+    meta?.type === 'story' ||
+    (item?.story_id && !item?.shared_post_id)
+  ) {
+    return 'story';
+  }
+
   // Sponsored/Ad items
   if (item?.source === 'sponsored' || 
       item?.item_type === 'sponsored' || 
@@ -183,6 +196,8 @@ const getFeedItemId = (item: any): number => {
   const type = getFeedItemType(item);
 
   switch (type) {
+    case 'story':
+      return Number(item?.story_id ?? item?.id ?? 0);
     case 'product':
       return Number(item?.product_id ?? item?.meta?.marketplace?.id ?? item?.id ?? 0);
     case 'event':
@@ -1311,6 +1326,8 @@ const normalizeEvent = (e: any): Event => {
     views: safeArray(s?.views),
     views_count: safeNumber(s?.views_count ?? s?.viewsCount, 0),
     reactions_count: safeNumber(s?.reactions_count ?? s?.reactionsCount, 0),
+    comments_count: safeNumber(s?.comments_count ?? s?.commentsCount ?? s?.discussions_count ?? (Array.isArray(s?.comments) ? s.comments.length : 0), 0),
+    shares_count: safeNumber(s?.shares_count ?? s?.sharesCount ?? s?.shares, 0),
     my_reaction: s?.my_reaction ?? s?.myReaction ?? null,
     reaction_breakdown: s?.reaction_breakdown ?? {},
     expires_at: null,
@@ -4843,6 +4860,8 @@ const loadMoreFeed = useCallback(async () => {
             my_reaction: ns.my_reaction ?? old.my_reaction,
             views_count: ns.views_count ?? old.views_count,
             reactions_count: ns.reactions_count ?? old.reactions_count,
+            comments_count: ns.comments_count ?? old.comments_count,
+            shares_count: ns.shares_count ?? old.shares_count,
           };
         });
       });
@@ -10852,6 +10871,32 @@ const handleShareComplete = useCallback(
               : p
           );
         });
+
+        const isStory = !!(targetPost?.story_id || targetPost?.item_type === 'story' || targetPost?.type === 'story' || targetPost?.kind === 'story');
+        if (isStory) {
+          setStories((prev) =>
+            safeArray(prev).map((s: any) =>
+              Number(s.id) === targetPostId || Number(s.story_id) === targetPostId
+                ? {
+                    ...s,
+                    shares: Math.max(safeNumber(s.shares) + 1, nextSharesCount),
+                    shares_count: Math.max(safeNumber(s.shares_count ?? s.shares) + 1, nextSharesCount),
+                  }
+                : s
+            )
+          );
+          if (frozenStoriesRef.current) {
+            frozenStoriesRef.current = frozenStoriesRef.current.map((s: any) =>
+              Number(s.id) === targetPostId || Number(s.story_id) === targetPostId
+                ? {
+                    ...s,
+                    shares: Math.max(safeNumber(s.shares) + 1, nextSharesCount),
+                    shares_count: Math.max(safeNumber(s.shares_count ?? s.shares) + 1, nextSharesCount),
+                  }
+                : s
+            );
+          }
+        }
       }
 
       // If shared to Feed or Profile, immediately insert the new shared post card
@@ -12569,6 +12614,16 @@ return (
     onFollow={followUser}
     checkIsFollowing={checkIsFollowing}
     followLoading={followLoading}
+    onCountChange={(count) => {
+      setStories(prev =>
+        prev.map(s => Number(s.id) === Number(activeStoryCommentId) ? { ...s, comments_count: count } : s)
+      );
+      if (frozenStoriesRef.current) {
+        frozenStoriesRef.current = frozenStoriesRef.current.map((s: any) =>
+          Number(s.id) === Number(activeStoryCommentId) ? { ...s, comments_count: count } : s
+        );
+      }
+    }}
   />
 )}
   
